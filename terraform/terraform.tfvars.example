@@ -1,0 +1,19 @@
+# Optional overrides:
+# project     = "agentcore-strands"
+# environment = "dev"
+# region      = "us-east-1"
+
+# Deploy the text-to-SQL demo database. Creates a disposable RDS Postgres
+# instance, initializes complex raw tables, simplified analytics views, scenario
+# metric views, and two read-only database roles:
+#   text_to_sql_raw_ro   — raw_app tables only
+#   text_to_sql_views_ro — analytics_app views only
+#
+# Requires `psql` (or Docker) on the Terraform runner when
+# demo_postgres_mcp_run_schema_initializer = true. The runner must be able to
+# reach the database endpoint.
+enable_demo_postgres_mcp_database     = true
+demo_postgres_mcp_publicly_accessible = true
+demo_postgres_mcp_allowed_cidr_blocks = ["203.0.113.10/32"]
+demo_postgres_mcp_schema_initializer  = "psql" # or "docker"
+# demo_postgres_mcp_seed_scale_factor = 2
