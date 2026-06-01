@@ -1,7 +1,7 @@
 variable "project" {
   description = "Project name used in resource names."
   type        = string
-  default     = "agentcore-strands"
+  default     = "postgres-mcp-demo"
 }
 
 variable "environment" {

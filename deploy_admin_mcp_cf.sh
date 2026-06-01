@@ -20,18 +20,50 @@ TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.am
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-admin}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-008701887645.dkr.ecr.us-east-1.amazonaws.com/postgres-mcp:v0.1.0}"
-
-DATABASE_URI="${DATABASE_URI:-}"
+DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
+DATABASE_URI="${DATABASE_URI:-postgresql://demo_admin:KqBAo7lN6F91LRiW1rkZj7VhGLP1sDBX@postgres-mcp-demo-dev-demo-postgres-mcp.cdzohpfba5bv.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
 
 # ── Networking ─────────────────────────────────────────────────────────────────
 # Use a different CIDR block to avoid conflicts with the views stack (10.42.x.x)
 VPC_CIDR="${VPC_CIDR:-10.43.0.0/16}"
 PUBLIC_SUBNET_1_CIDR="${PUBLIC_SUBNET_1_CIDR:-10.43.1.0/24}"
 PUBLIC_SUBNET_2_CIDR="${PUBLIC_SUBNET_2_CIDR:-10.43.2.0/24}"
-PEER_VPC_ID="${PEER_VPC_ID:-vpc-0f9c8a9f812ceda37}"
-PEER_VPC_CIDR="${PEER_VPC_CIDR:-172.31.0.0/16}"
 PEER_VPC_ROUTE_TABLE_IDS="${PEER_VPC_ROUTE_TABLE_IDS:-}"
-RDS_SECURITY_GROUP_ID="${RDS_SECURITY_GROUP_ID:-sg-0643065955d9a5d86}"
+
+# ── RDS VPC lookup ─────────────────────────────────────────────────────────────
+if [ -n "$DB_IDENTIFIER" ]; then
+  echo "Looking up VPC info for RDS instance '${DB_IDENTIFIER}'..."
+  DB_INFO=$(AWS_PROFILE="$AWS_PROFILE" aws rds describe-db-instances \
+    --db-instance-identifier "$DB_IDENTIFIER" \
+    --region "$AWS_REGION" \
+    --query "DBInstances[0].{VpcId:DBSubnetGroup.VpcId,SgIds:VpcSecurityGroups[*].VpcSecurityGroupId}" \
+    --output json)
+
+  _PEER_VPC_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['VpcId'])")
+  _RDS_SG_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['SgIds'][0])")
+
+  if [ -z "$_PEER_VPC_ID" ] || [ "$_PEER_VPC_ID" = "None" ]; then
+    echo "ERROR: Could not find VPC for DB instance '${DB_IDENTIFIER}'." >&2
+    exit 1
+  fi
+
+  _PEER_VPC_CIDR=$(AWS_PROFILE="$AWS_PROFILE" aws ec2 describe-vpcs \
+    --vpc-ids "$_PEER_VPC_ID" \
+    --region "$AWS_REGION" \
+    --query "Vpcs[0].CidrBlock" \
+    --output text)
+
+  PEER_VPC_ID="${PEER_VPC_ID:-$_PEER_VPC_ID}"
+  PEER_VPC_CIDR="${PEER_VPC_CIDR:-$_PEER_VPC_CIDR}"
+  RDS_SECURITY_GROUP_ID="${RDS_SECURITY_GROUP_ID:-$_RDS_SG_ID}"
+  echo "  VPC ID:       ${PEER_VPC_ID}"
+  echo "  VPC CIDR:     ${PEER_VPC_CIDR}"
+  echo "  Security GID: ${RDS_SECURITY_GROUP_ID}"
+else
+  PEER_VPC_ID="${PEER_VPC_ID:-}"
+  PEER_VPC_CIDR="${PEER_VPC_CIDR:-}"
+  RDS_SECURITY_GROUP_ID="${RDS_SECURITY_GROUP_ID:-}"
+fi
 DOMAIN="${DOMAIN:-}"
 CERTIFICATE_ARN="${CERTIFICATE_ARN:-}"
 ALB_IDLE_TIMEOUT="${ALB_IDLE_TIMEOUT:-300}"
