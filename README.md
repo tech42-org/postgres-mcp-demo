@@ -17,6 +17,16 @@ AWS Bedrock AgentCore Runtime  (deploy_agentcore_agent_cf.sh)
             PostgreSQL (RDS)  (deploy_demo_db_tf.sh)
 ```
 
+## Demo
+
+**Business query** — ask a natural-language question, get SQL-generated results:
+
+![Business query](assets/business_query.png)
+
+**DB optimization** — inspect and optimize queries across the full schema:
+
+![DB optimization](assets/db_optimization.png)
+
 ## Prerequisites
 
 ### 1. Subscribe on AWS Marketplace

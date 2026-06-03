@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
 # ── Required configuration ────────────────────────────────────────────────────
-export AGENTCORE_RUNTIME_ARN="arn:aws:bedrock-agentcore:us-east-1:008701887645:runtime/demo_mcp_agent_dev_a86e3650-EFclBj4xvn"
-export VIEWS_MCP_URL="http://demo-p-LoadB-dNPu6rTqpsLI-1934868064.us-east-1.elb.amazonaws.com/mcp"
-export VIEWS_MCP_API_KEY="8P624Amc1ky7TvSxivG624NHZz6BGUFsOHtKneAUyuD9H2Xh"
-export ADMIN_MCP_URL="http://demo-p-LoadB-FxFz6BxZjB4g-1519957086.us-east-1.elb.amazonaws.com/mcp"
-export ADMIN_MCP_API_KEY="mObfhB3j8eGyZ6KHtBCZ3wP3diIx3o3tb5hdw99OEvmIxtjH"
+export AGENTCORE_RUNTIME_ARN="arn:aws:bedrock-agentcore:us-east-1:008701887645:runtime/demo_mcp_agent_dev_f4e07880-7o4V48DMi1"
+export VIEWS_MCP_URL="http://demo-p-LoadB-TR7y3S8wBYlQ-1273072157.us-east-1.elb.amazonaws.com/mcp"
+export VIEWS_MCP_API_KEY="u1MvlwoYgBhmfsZIcNLA1suOHXaBZlgqsDHc7MrCvIbOOFr2"
+export ADMIN_MCP_URL="http://demo-p-LoadB-ZRa2Jn2vZyQ9-1663979316.us-east-1.elb.amazonaws.com/mcp"
+export ADMIN_MCP_API_KEY="k6eOde736pX9NgjyYGPRLjJQClivVtnu02N7DF4Frs30EcZr"
 
 # ── Optional overrides (defaults match server.py) ─────────────────────────────
 export AWS_PROFILE="${AWS_PROFILE:-sandbox}"

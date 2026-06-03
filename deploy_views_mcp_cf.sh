@@ -20,7 +20,7 @@ PROJECT_NAME="${PROJECT_NAME:-demo-mcp-views}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-008701887645.dkr.ecr.us-east-1.amazonaws.com/postgres-mcp:v0.1.0}"
 DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
-DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:QZ1lUWlEmSpru3ubgs0JxU9yminakb1W@postgres-mcp-demo-dev-demo-postgres-mcp.cdzohpfba5bv.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
+DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:tYtwk97mjhj9UxxaTS18SAAgdsBlfsfp@postgres-mcp-demo-dev-demo-postgres-mcp.cdzohpfba5bv.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
 
 # ── Networking ─────────────────────────────────────────────────────────────────
 VPC_CIDR="${VPC_CIDR:-10.42.0.0/16}"
