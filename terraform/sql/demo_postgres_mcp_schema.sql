@@ -10,6 +10,9 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'views_role') \gexec
 ALTER ROLE :"raw_role" WITH LOGIN PASSWORD :'raw_role_password';
 ALTER ROLE :"views_role" WITH LOGIN PASSWORD :'views_role_password';
 
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+CREATE EXTENSION IF NOT EXISTS hypopg;
+
 CREATE SCHEMA IF NOT EXISTS raw_app;
 CREATE SCHEMA IF NOT EXISTS analytics_app;
 CREATE SCHEMA IF NOT EXISTS demo_app;

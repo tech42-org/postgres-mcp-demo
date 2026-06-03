@@ -5,7 +5,7 @@ Demo of AWS AgentCore invoking a PostgreSQL database through the Postgres MCP se
 ## Architecture
 
 ```
-Jupyter Notebook
+Browser / Demo App  (deploy_demo_app.sh)
       │
       ▼
 AWS Bedrock AgentCore Runtime  (deploy_agentcore_agent_cf.sh)
@@ -96,7 +96,56 @@ Both scripts handle create vs. update automatically and delete/recreate if the s
 ./deploy_agentcore_agent_cf.sh
 ```
 
-## Test
+### Step 4 — Run the demo app
+
+The demo app is a local web UI that streams AgentCore responses via Server-Sent Events. It requires Python 3.9+ and the values output by the previous steps.
+
+Retrieve the AgentCore runtime ARN and MCP endpoints from the CloudFormation stacks:
+
+```bash
+AGENTCORE_RUNTIME_ARN=$(aws cloudformation describe-stacks \
+  --stack-name demo-postgres-mcp-agent \
+  --query 'Stacks[0].Outputs[?OutputKey==`AgentCoreRuntimeArn`].OutputValue' \
+  --output text)
+
+VIEWS_MCP_URL=$(aws cloudformation describe-stacks \
+  --stack-name demo-postgres-mcp-views \
+  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
+  --output text)
+
+VIEWS_MCP_API_KEY=$(aws cloudformation describe-stacks \
+  --stack-name demo-postgres-mcp-views \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiKey`].OutputValue' \
+  --output text)
+
+ADMIN_MCP_URL=$(aws cloudformation describe-stacks \
+  --stack-name demo-postgres-mcp-admin \
+  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
+  --output text)
+
+ADMIN_MCP_API_KEY=$(aws cloudformation describe-stacks \
+  --stack-name demo-postgres-mcp-admin \
+  --query 'Stacks[0].Outputs[?OutputKey==`ApiKey`].OutputValue' \
+  --output text)
+```
+
+Open `deploy_demo_app.sh`, fill in the five exported variables at the top with the values above, then run:
+
+```bash
+./deploy_demo_app.sh
+# → open http://localhost:8000
+```
+
+The script installs `fastapi`, `uvicorn`, and `boto3` from `frontend/requirements.txt`, then starts the server. Optional overrides:
+
+| Variable | Default | Description |
+|---|---|---|
+| `AWS_PROFILE` | `sandbox` | boto3 named profile |
+| `AWS_REGION` | `us-east-1` | AWS region |
+| `MODEL_ID` | `claude-haiku-4-5` | Bedrock model ID |
+| `PORT` | `8000` | HTTP port |
+
+## Test (Jupyter)
 
 Open and run `text2sql_postgres_mcp_example.ipynb` in Jupyter. The notebook automatically resolves all endpoints and API keys from the CloudFormation stack outputs — no manual configuration required.
 

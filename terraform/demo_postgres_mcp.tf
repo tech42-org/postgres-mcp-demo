@@ -81,6 +81,22 @@ resource "aws_db_subnet_group" "demo_postgres_mcp" {
   tags       = local.tags
 }
 
+resource "aws_db_parameter_group" "demo_postgres_mcp" {
+  count = var.enable_demo_postgres_mcp_database ? 1 : 0
+
+  name        = "${local.demo_postgres_mcp_db_identifier}-params"
+  family      = "postgres${split(".", var.demo_postgres_mcp_engine_version)[0]}"
+  description = "Enable pg_stat_statements for demo Postgres MCP"
+
+  parameter {
+    name         = "shared_preload_libraries"
+    value        = "pg_stat_statements"
+    apply_method = "pending-reboot"
+  }
+
+  tags = local.tags
+}
+
 resource "aws_db_instance" "demo_postgres_mcp" {
   count = var.enable_demo_postgres_mcp_database ? 1 : 0
 
@@ -92,6 +108,7 @@ resource "aws_db_instance" "demo_postgres_mcp" {
   db_name                 = local.demo_postgres_mcp_db_name
   username                = var.demo_postgres_mcp_master_username
   password                = random_password.demo_postgres_mcp_master[0].result
+  parameter_group_name    = aws_db_parameter_group.demo_postgres_mcp[0].name
   db_subnet_group_name    = length(var.demo_postgres_mcp_subnet_ids) > 0 ? aws_db_subnet_group.demo_postgres_mcp[0].name : null
   vpc_security_group_ids  = concat(var.demo_postgres_mcp_vpc_security_group_ids, var.demo_postgres_mcp_create_security_group ? [aws_security_group.demo_postgres_mcp_db[0].id] : [])
   publicly_accessible     = var.demo_postgres_mcp_publicly_accessible
