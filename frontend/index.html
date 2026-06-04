@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Azeret+Mono:ital,wght@0,300;0,400;0,500;0,600;1,300&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 /* ── Reset & Base ──────────────────────────────────────────────────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -255,6 +256,16 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   color:var(--text2);vertical-align:top;
 }
 .msg-content tr:hover td{background:rgba(255,255,255,0.02)}
+.chart-wrapper{margin:12px 0}
+.chart-controls{display:flex;gap:6px;margin-bottom:8px}
+.chart-btn{
+  padding:3px 10px;font-size:11px;font-family:var(--mono);
+  background:var(--bg3);color:var(--text2);
+  border:1px solid var(--border);border-radius:4px;cursor:pointer;
+}
+.chart-btn:hover{color:var(--text)}
+.chart-btn.active{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.chart-canvas-wrap{position:relative;height:240px;margin-bottom:12px}
 
 .cursor{
   display:inline-block;width:7px;height:14px;
@@ -874,6 +885,7 @@ function finalizeAgentMessage(text, meta) {
 
   if (!state.currentAgentMsgEl) return;
   state.currentAgentMsgEl.innerHTML = renderMarkdown(text || '(no response)');
+  injectCharts(state.currentAgentMsgEl);
 
   if (state.thinkSectionEl && !state.thinkSectionEl.classList.contains('done')) {
     state.thinkSectionEl.classList.add('done');
@@ -908,6 +920,89 @@ function renderMarkdown(text) {
   try {
     return marked.parse(text, {breaks:true, gfm:true});
   } catch(_) { return escHtml(text); }
+}
+
+// ── Chart helpers ─────────────────────────────────────────────────────────────
+const CHART_PALETTE = ['#7c83ff','#4fc3a1','#f7a35c','#ea5f94'];
+
+function parseTableForChart(table) {
+  const headers = [...table.querySelectorAll('thead th')].map(th => th.textContent.trim());
+  const rows    = [...table.querySelectorAll('tbody tr')];
+  if (!headers.length || !rows.length) return null;
+  const labels = rows.map(r => r.cells[0]?.textContent.trim() || '');
+  const datasets = [];
+  for (let i = 1; i < headers.length; i++) {
+    const values = rows.map(r => {
+      const raw = r.cells[i]?.textContent.replace(/[,$% ]/g,'') || '';
+      const n = parseFloat(raw);
+      return isNaN(n) ? null : n;
+    });
+    if (values.some(v => v !== null)) {
+      datasets.push({ label: headers[i], data: values.map(v => v ?? 0) });
+    }
+  }
+  return datasets.length ? { labels, datasets } : null;
+}
+
+function injectCharts(container) {
+  container.querySelectorAll('table').forEach(table => {
+    const data = parseTableForChart(table);
+    if (!data) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chart-wrapper';
+    table.parentNode.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
+
+    const controls = document.createElement('div');
+    controls.className = 'chart-controls';
+    controls.innerHTML = '<button class="chart-btn active" data-type="bar">Bar</button><button class="chart-btn" data-type="line">Line</button>';
+    wrapper.insertBefore(controls, table);
+
+    const canvasWrap = document.createElement('div');
+    canvasWrap.className = 'chart-canvas-wrap';
+    const canvas = document.createElement('canvas');
+    canvasWrap.appendChild(canvas);
+    wrapper.insertBefore(canvasWrap, table);
+
+    let chart = null;
+    const makeChart = type => {
+      if (chart) chart.destroy();
+      chart = new Chart(canvas, {
+        type,
+        data: {
+          labels: data.labels,
+          datasets: data.datasets.map((d, i) => ({
+            label: d.label,
+            data: d.data,
+            borderColor: CHART_PALETTE[i % CHART_PALETTE.length],
+            backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length] + '44',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 3,
+          })),
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#8899aa', font: { family: 'monospace', size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#4a5c70', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1e2a36' } },
+            y: { ticks: { color: '#4a5c70', font: { size: 10 } }, grid: { color: '#1e2a36' } },
+          },
+        },
+      });
+    };
+    makeChart('bar');
+
+    controls.querySelectorAll('.chart-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        controls.querySelectorAll('.chart-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        makeChart(btn.dataset.type);
+      });
+    });
+  });
 }
 
 function escHtml(s) {
