@@ -262,6 +262,39 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   animation:blink 1s step-end infinite;vertical-align:middle;
 }
 
+/* ── Thinking section in chat bubble ───────────────────────────────────────── */
+.thinking-section{margin-bottom:0;transition:opacity 0.4s ease}
+.thinking-section.done{opacity:0.3}
+.thinking-header{
+  display:flex;align-items:center;gap:7px;
+  font-size:11px;color:var(--text3);letter-spacing:0.06em;margin-bottom:5px;
+}
+.thinking-icon{
+  display:inline-block;font-size:14px;color:var(--accent);
+  animation:spin-slow 2s linear infinite;
+}
+.thinking-section.done .thinking-icon{animation:none;color:var(--text3)}
+.thinking-steps{
+  line-height:1.5;padding:4px 8px;border-left:2px solid var(--border2);
+}
+.thinking-section.done .thinking-steps{animation:none}
+.think-step-item{
+  display:flex;align-items:center;gap:8px;padding:3px 0;
+  font-size:12px;color:var(--text);font-style:normal;animation:none;
+}
+.think-step-item .think-step-icon{
+  flex-shrink:0;width:16px;height:16px;
+  display:flex;align-items:center;justify-content:center;color:var(--text2);
+}
+.think-step-item.active .think-step-icon{color:var(--accent);animation:spin-slow 2s linear infinite}
+.think-step-item .think-step-text{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.think-step-item .think-step-arrow{flex-shrink:0;color:var(--text3);font-size:11px}
+.thinking-steps.collapsed{display:none}
+.thinking-header{cursor:default;user-select:none}
+.thinking-header.done{cursor:pointer}
+.think-steps-chevron{margin-left:4px;font-size:10px;color:var(--text3);transition:transform 0.2s;display:inline-block}
+.response-divider{height:1px;background:var(--border);margin:10px 0}
+
 /* ── Final stats bar ───────────────────────────────────────────────────────── */
 .final-stats{
   display:flex;gap:12px;flex-wrap:wrap;
@@ -351,6 +384,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 
 /* ── Animations ────────────────────────────────────────────────────────────── */
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes spin-slow{to{transform:rotate(360deg)}}
+@keyframes think-pulse{0%,100%{opacity:0.45}50%{opacity:1}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 @keyframes pulse-glow{0%,100%{text-shadow:0 0 8px rgba(0,229,170,0.4)}50%{text-shadow:0 0 16px rgba(0,229,170,0.8)}}
 @keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.5;transform:scale(0.8)}}
@@ -490,6 +525,13 @@ const state = {
   currentThinkText: '',
   thinkEl: null,
   modelLabel: '',
+  streamPhase:      'thinking',
+  pendingToolCount: 0,
+  thinkSectionEl:   null,
+  thinkingStepsEl:  null,
+  responseSectionEl:null,
+  chatThinkText:    '',
+  thinkingStepsList:[],
 };
 
 // ── Config check ─────────────────────────────────────────────────────────────
@@ -568,7 +610,7 @@ function clearChat() {
   document.getElementById('trace-stats').style.display = 'none';
   document.getElementById('step-counter').textContent = '—';
   document.getElementById('session-badge').textContent = 'no active session';
-  Object.assign(state, {stepCount:0,eventCount:0,toolCount:0,t0:null,ttft:null,activeToolCards:{},currentAgentMsgEl:null,currentStreamText:'',thinkEl:null});
+  Object.assign(state, {stepCount:0,eventCount:0,toolCount:0,t0:null,ttft:null,activeToolCards:{},currentAgentMsgEl:null,currentStreamText:'',thinkEl:null,streamPhase:'thinking',pendingToolCount:0,thinkSectionEl:null,thinkingStepsEl:null,responseSectionEl:null,chatThinkText:'',thinkingStepsList:[]});
 }
 
 // ── Main streaming handler ───────────────────────────────────────────────────
@@ -589,6 +631,13 @@ async function startChat(query) {
   state.currentStreamText = '';
   state.currentThinkText  = '';
   state.thinkEl           = null;
+  state.streamPhase       = 'thinking';
+  state.pendingToolCount  = 0;
+  state.thinkSectionEl    = null;
+  state.thinkingStepsEl   = null;
+  state.responseSectionEl = null;
+  state.chatThinkText     = '';
+  state.thinkingStepsList = [];
 
   // Reset trace panel (but not stats)
   document.getElementById('trace-body').innerHTML = '';
@@ -603,12 +652,11 @@ async function startChat(query) {
 
   // Add agent message placeholder
   const agentBubble = appendMessage('agent', '');
+  state.thinkSectionEl    = agentBubble.querySelector('.thinking-section');
+  state.thinkingStepsEl   = agentBubble.querySelector('.thinking-steps');
+  state.responseSectionEl = agentBubble.querySelector('.response-section');
   state.currentAgentMsgEl = agentBubble.querySelector('.msg-content');
-  // Add cursor
-  const cursor = document.createElement('span');
-  cursor.className = 'cursor';
-  cursor.id = 'stream-cursor';
-  state.currentAgentMsgEl.appendChild(cursor);
+  // Cursor is added only when transitioning to responding phase
 
   const mode     = state.mode;
   const tenantId = document.getElementById('tenant-input').value.trim() || 'tenant-a';
@@ -680,18 +728,50 @@ function handleEvent(ev) {
 
     case 'content_delta': {
       const text = ev.content || '';
-      state.currentStreamText += text;
-      state.currentThinkText  += text;
-      renderStreamingText();
-      // update thinking block in trace
-      updateThinkBlock(state.currentThinkText);
+      if (state.streamPhase === 'thinking') {
+        state.chatThinkText    += text;
+        state.currentThinkText += text;
+        renderThinkingSteps();
+        updateThinkBlock(state.currentThinkText);
+      } else {
+        state.currentStreamText += text;
+        renderStreamingText();
+      }
       break;
     }
 
     case 'tool_use_start': {
-      // Flush current think text as a complete segment
       flushThinkBlock();
+      if (state.currentThinkText.trim()) {
+        state.thinkingStepsList.push({ type: 'thought', text: state.currentThinkText.trim() });
+      }
       state.currentThinkText = '';
+      state.thinkingStepsList.push({ type: 'tool', tool: ev.tool || 'unknown', tool_use_id: ev.tool_use_id, status: 'running' });
+      renderThinkingSteps();
+      state.pendingToolCount++;
+
+      // If responding and agent calls another tool, revert to thinking phase
+      if (state.streamPhase === 'responding') {
+        if (state.currentStreamText) {
+          state.chatThinkText += '\n' + state.currentStreamText;
+          state.currentStreamText = '';
+        }
+        if (state.currentAgentMsgEl) state.currentAgentMsgEl.innerHTML = '';
+        if (state.responseSectionEl) state.responseSectionEl.style.display = 'none';
+        if (state.thinkSectionEl) {
+          state.thinkSectionEl.classList.remove('done');
+          const hdr = state.thinkSectionEl.querySelector('.thinking-header');
+          if (hdr) {
+            hdr.className = 'thinking-header';
+            hdr.onclick = null;
+            hdr.innerHTML = `<span class="thinking-icon">⟳</span><span class="thinking-label">Thinking...</span>`;
+          }
+        }
+        state.streamPhase = 'thinking';
+      }
+
+      const cursor = document.getElementById('stream-cursor');
+      if (cursor) cursor.remove();
 
       state.toolCount++;
       state.stepCount++;
@@ -699,14 +779,15 @@ function handleEvent(ev) {
 
       const card = createToolCard(ev);
       state.activeToolCards[ev.tool_use_id] = { startTime: Date.now(), el: card };
-
-      // Interrupt streaming text — clear cursor, will re-add after tool
-      const cursor = document.getElementById('stream-cursor');
-      if (cursor) cursor.remove();
       break;
     }
 
     case 'tool_use_result': {
+      const stepIdx = state.thinkingStepsList.findIndex(s => s.type === 'tool' && s.tool_use_id === ev.tool_use_id);
+      if (stepIdx !== -1) {
+        state.thinkingStepsList[stepIdx].status = ev.status === 'error' ? 'error' : 'done';
+        renderThinkingSteps();
+      }
       const id = ev.tool_use_id;
       // Match by id, fall back to oldest running card if id missing/unknown
       const activeCard = state.activeToolCards[id]
@@ -720,14 +801,11 @@ function handleEvent(ev) {
           delete state.activeToolCards[Object.keys(state.activeToolCards)[0]];
         }
       }
-      updateStats();
-      // Re-add cursor after tool result
-      if (state.currentAgentMsgEl && !document.getElementById('stream-cursor')) {
-        const cursor = document.createElement('span');
-        cursor.className = 'cursor';
-        cursor.id = 'stream-cursor';
-        state.currentAgentMsgEl.appendChild(cursor);
+      state.pendingToolCount = Math.max(0, state.pendingToolCount - 1);
+      if (state.pendingToolCount === 0 && state.streamPhase === 'thinking') {
+        transitionToRespondingPhase();
       }
+      updateStats();
       break;
     }
 
@@ -774,6 +852,7 @@ function cleanupRunningCards() {
 
 function renderStreamingText() {
   if (!state.currentAgentMsgEl) return;
+  if (state.streamPhase !== 'responding') return;
   const cursor = document.getElementById('stream-cursor');
   if (cursor) cursor.remove();
   state.currentAgentMsgEl.innerHTML = renderMarkdown(state.currentStreamText);
@@ -787,8 +866,24 @@ function renderStreamingText() {
 function finalizeAgentMessage(text, meta) {
   const cursor = document.getElementById('stream-cursor');
   if (cursor) cursor.remove();
+
+  // If no tools were used, transition now so response section is visible
+  if (state.streamPhase === 'thinking') {
+    transitionToRespondingPhase();
+  }
+
   if (!state.currentAgentMsgEl) return;
   state.currentAgentMsgEl.innerHTML = renderMarkdown(text || '(no response)');
+
+  if (state.thinkSectionEl && !state.thinkSectionEl.classList.contains('done')) {
+    state.thinkSectionEl.classList.add('done');
+    const hdr = state.thinkSectionEl.querySelector('.thinking-header');
+    if (hdr) {
+      const n = state.thinkingStepsList.length;
+      hdr.className = 'thinking-header done';
+      hdr.innerHTML = `<span class="thinking-icon">⟳</span><span class="thinking-label">Completed ${n} step${n !== 1 ? 's' : ''}</span><span class="think-steps-chevron">∨</span>`;
+    }
+  }
 
   // Append final stats bar to the message bubble
   if (meta) {
@@ -838,6 +933,73 @@ function updateThinkBlock(text) {
 function flushThinkBlock() {
   // Seal the current think block (don't update it anymore)
   state.thinkEl = null;
+}
+
+const THINK_STEP_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l2.5 1.5"/></svg>`;
+const TOOL_STEP_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>`;
+
+function renderThinkingSteps() {
+  if (!state.thinkingStepsEl) return;
+  const completedHtml = state.thinkingStepsList.map(step => {
+    if (step.type === 'tool') {
+      const isRunning = step.status === 'running';
+      return `<div class="think-step-item${isRunning ? ' active' : ''}">
+        <div class="think-step-icon">${TOOL_STEP_ICON}</div>
+        <div class="think-step-text">${escHtml(step.tool)}</div>
+        <span class="think-step-arrow">›</span>
+      </div>`;
+    }
+    const firstLine = step.text.split('\n').find(l => l.trim()) || step.text;
+    const preview = firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine;
+    return `<div class="think-step-item">
+      <div class="think-step-icon">${THINK_STEP_ICON}</div>
+      <div class="think-step-text">${escHtml(preview.trim())}</div>
+      <span class="think-step-arrow">›</span>
+    </div>`;
+  }).join('');
+  const active = state.currentThinkText.trim();
+  const activeHtml = active
+    ? `<div class="think-step-item active">
+        <div class="think-step-icon">${THINK_STEP_ICON}</div>
+        <div class="think-step-text">${escHtml(active.length > 60 ? '…' + active.slice(-60) : active)}</div>
+      </div>`
+    : '';
+  state.thinkingStepsEl.innerHTML = completedHtml + activeHtml;
+  scrollChat();
+}
+
+function transitionToRespondingPhase() {
+  state.streamPhase = 'responding';
+  // Capture any remaining reasoning text as a final step
+  if (state.currentThinkText.trim()) {
+    state.thinkingStepsList.push({ type: 'thought', text: state.currentThinkText.trim() });
+    state.currentThinkText = '';
+    renderThinkingSteps();
+  }
+  if (state.thinkSectionEl) {
+    state.thinkSectionEl.classList.add('done');
+    const hdr = state.thinkSectionEl.querySelector('.thinking-header');
+    if (hdr) {
+      const n = state.thinkingStepsList.length;
+      hdr.className = 'thinking-header done';
+      hdr.innerHTML = `<span class="thinking-icon">⟳</span><span class="thinking-label">Completed ${n} step${n !== 1 ? 's' : ''}</span><span class="think-steps-chevron">∨</span>`;
+      hdr.onclick = () => {
+        state.thinkingStepsEl.classList.toggle('collapsed');
+        const ch = hdr.querySelector('.think-steps-chevron');
+        if (ch) ch.style.transform = state.thinkingStepsEl.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
+      };
+    }
+  }
+  if (state.responseSectionEl) {
+    state.responseSectionEl.style.display = 'block';
+  }
+  if (state.currentAgentMsgEl && !document.getElementById('stream-cursor')) {
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    cursor.id = 'stream-cursor';
+    state.currentAgentMsgEl.appendChild(cursor);
+  }
+  scrollChat();
 }
 
 function createToolCard(ev) {
@@ -1015,12 +1177,31 @@ function appendMessage(role, text) {
   const now = new Date().toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
   const label = role === 'user' ? 'YOU' : '◆ AGENT';
 
-  wrapper.innerHTML = `
-    <div class="msg-meta">${label} · ${now}</div>
-    <div class="msg-bubble">
-      <div class="msg-content">${renderMarkdown(text)}</div>
-    </div>
-  `;
+  if (role === 'agent') {
+    wrapper.innerHTML = `
+      <div class="msg-meta">${label} · ${now}</div>
+      <div class="msg-bubble">
+        <div class="thinking-section">
+          <div class="thinking-header">
+            <span class="thinking-icon">⟳</span>
+            <span class="thinking-label">Thinking...</span>
+          </div>
+          <div class="thinking-steps"></div>
+        </div>
+        <div class="response-section" style="display:none">
+          <div class="response-divider"></div>
+          <div class="msg-content"></div>
+        </div>
+      </div>
+    `;
+  } else {
+    wrapper.innerHTML = `
+      <div class="msg-meta">${label} · ${now}</div>
+      <div class="msg-bubble">
+        <div class="msg-content">${renderMarkdown(text)}</div>
+      </div>
+    `;
+  }
   messages.appendChild(wrapper);
   scrollChat();
   return wrapper;
