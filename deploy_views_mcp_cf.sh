@@ -18,7 +18,7 @@ TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.am
 # ── Required parameters ────────────────────────────────────────────────────────
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-views}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
-CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-008701887645.dkr.ecr.us-east-1.amazonaws.com/postgres-mcp:v0.1.0}"
+CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v0.0.1}"
 DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
 DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:tYtwk97mjhj9UxxaTS18SAAgdsBlfsfp@postgres-mcp-demo-dev-demo-postgres-mcp.cdzohpfba5bv.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
 

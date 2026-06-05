@@ -6,10 +6,10 @@ FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
 # ── Required configuration ────────────────────────────────────────────────────
 export AGENTCORE_RUNTIME_ARN="arn:aws:bedrock-agentcore:us-east-1:008701887645:runtime/demo_mcp_agent_dev_f4e07880-7o4V48DMi1"
-export VIEWS_MCP_URL="http://demo-p-LoadB-TR7y3S8wBYlQ-1273072157.us-east-1.elb.amazonaws.com/mcp"
-export VIEWS_MCP_API_KEY="u1MvlwoYgBhmfsZIcNLA1suOHXaBZlgqsDHc7MrCvIbOOFr2"
-export ADMIN_MCP_URL="http://demo-p-LoadB-ZRa2Jn2vZyQ9-1663979316.us-east-1.elb.amazonaws.com/mcp"
-export ADMIN_MCP_API_KEY="k6eOde736pX9NgjyYGPRLjJQClivVtnu02N7DF4Frs30EcZr"
+export VIEWS_MCP_URL="http://demo-p-LoadB-Mxs1Gwmg3dgw-1147949419.us-east-1.elb.amazonaws.com/mcp"
+export VIEWS_MCP_API_KEY="XBAHz1bTJqtlroAOLZIDinsWgCaP9G957uKKqANOVGJoVBT0"
+export ADMIN_MCP_URL="http://demo-p-LoadB-9u4vz2FOQpVx-1459690127.us-east-1.elb.amazonaws.com/mcp"
+export ADMIN_MCP_API_KEY="64CKPt4w4Auox2CFV5gva9rEF9xQWjfyr7Ieh4ikvAh2E6js"
 
 # ── Optional overrides (defaults match server.py) ─────────────────────────────
 export AWS_PROFILE="${AWS_PROFILE:-sandbox}"
