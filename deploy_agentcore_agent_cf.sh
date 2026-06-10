@@ -11,7 +11,7 @@ set -e
 
 # ── Stack identity ─────────────────────────────────────────────────────────────
 STACK_NAME="${STACK_NAME:-demo-postgres-mcp-agent}"
-AWS_PROFILE="${AWS_PROFILE:-sandbox}"
+AWS_PROFILE="${AWS_PROFILE:-tech-42}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_URL="${TEMPLATE_URL:-https://s3.amazonaws.com/tech42-agentcore-deployment-assets/tech-42-agentcore-deployment.yaml}"
 
@@ -19,7 +19,7 @@ TEMPLATE_URL="${TEMPLATE_URL:-https://s3.amazonaws.com/tech42-agentcore-deployme
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-agent}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 AGENT_NAME="${AGENT_NAME:-demo_postgres_mcp_agent}"
-ECR_IMAGE_URI="${ECR_IMAGE_URI:-008701887645.dkr.ecr.us-east-1.amazonaws.com/agent42-base-dev:v0.2.2.langfuse}"
+ECR_IMAGE_URI="${ECR_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/tech42-agentcore-base:v1.1.0.langfuse}"
 NETWORK_MODE="${NETWORK_MODE:-PUBLIC}"
 VPC_SECURITY_GROUP_IDS="${VPC_SECURITY_GROUP_IDS:-}"
 VPC_SUBNET_IDS="${VPC_SUBNET_IDS:-}"
@@ -33,8 +33,8 @@ ENABLE_GUARDRAIL="${ENABLE_GUARDRAIL:-true}"
 GUARDRAIL_DESCRIPTION="${GUARDRAIL_DESCRIPTION:-Guardrail for AgentCore runtime with content filtering}"
 
 # ── Observability ──────────────────────────────────────────────────────────────
-DISABLE_ADOT_OBSERVABILITY="${DISABLE_ADOT_OBSERVABILITY:-true}"
-LANGFUSE_BASE_URL="${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}"
+DISABLE_ADOT_OBSERVABILITY="${DISABLE_ADOT_OBSERVABILITY:-false}"
+LANGFUSE_BASE_URL="${LANGFUSE_BASE_URL:-}"
 LANGFUSE_PUBLIC_KEY="${LANGFUSE_PUBLIC_KEY:-}"
 LANGFUSE_SECRET_KEY="${LANGFUSE_SECRET_KEY:-}"
 

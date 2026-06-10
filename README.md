@@ -1,5 +1,7 @@
 # postgres-mcp-demo
 
+**Live demo: [sqlagent.tech42demo.com](https://sqlagent.tech42demo.com/)**
+
 Demo of AWS AgentCore invoking a PostgreSQL database through the Postgres MCP server using text-to-SQL. The agent runs on AWS Bedrock AgentCore and queries a multi-tenant analytics database via two MCP server deployments — one tenant-scoped (Views) and one unrestricted (Admin).
 
 ## Architecture
@@ -33,10 +35,10 @@ AWS Bedrock AgentCore Runtime  (deploy_agentcore_agent_cf.sh)
 
 Before deploying, subscribe to both Tech 42 products in your AWS account:
 
-- **Tech 42 AgentCore** — required for `deploy_agentcore_agent_cf.sh`
-- **Tech 42 Text-to-SQL MCP Server** — required for `deploy_views_mcp_cf.sh` and `deploy_admin_mcp_cf.sh`
+- **[Tech 42 AgentCore](https://aws.amazon.com/marketplace/pp/prodview-qizrc6sk6fb7a)** — required for `deploy_agentcore_agent_cf.sh`
+- **[Tech 42 PostgreSQL Text-to-SQL MCP Server](https://aws.amazon.com/marketplace/pp/prodview-upn53f2cj47ds)** — required for `deploy_views_mcp_cf.sh` and `deploy_admin_mcp_cf.sh`
 
-Search for both products at [AWS Marketplace](https://aws.amazon.com/marketplace) and click **Subscribe** on each.
+Click **Subscribe** on each product page before deploying.
 
 ### 2. Requirements
 

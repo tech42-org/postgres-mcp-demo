@@ -11,16 +11,16 @@ set -e
 
 # ── Stack identity ─────────────────────────────────────────────────────────────
 STACK_NAME="${STACK_NAME:-demo-postgres-mcp-views}"
-AWS_PROFILE="${AWS_PROFILE:-sandbox}"
+AWS_PROFILE="${AWS_PROFILE:-tech-42}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.amazonaws.com/postgres-mcp-ecs.yaml}"
 
 # ── Required parameters ────────────────────────────────────────────────────────
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-views}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
-CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v0.0.1}"
+CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v1.0.0}"
 DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
-DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:tYtwk97mjhj9UxxaTS18SAAgdsBlfsfp@postgres-mcp-demo-dev-demo-postgres-mcp.cdzohpfba5bv.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
+DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:s7XxNSzJaKNtGj8XerZqyV0tNKZYRhGY@postgres-mcp-demo-dev-demo-postgres-mcp.chgehfuhoilf.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
 
 # ── Networking ─────────────────────────────────────────────────────────────────
 VPC_CIDR="${VPC_CIDR:-10.42.0.0/16}"

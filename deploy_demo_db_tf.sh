@@ -14,7 +14,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="${SCRIPT_DIR}/terraform"
 
-AWS_PROFILE="${AWS_PROFILE:-sandbox}"
+AWS_PROFILE="${AWS_PROFILE:-tech-42}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TFVARS_FILE="${TFVARS_FILE:-${TF_DIR}/demo.tfvars}"
 
