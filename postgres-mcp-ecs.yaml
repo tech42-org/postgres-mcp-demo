@@ -1,0 +1,1008 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Postgres MCP Server on ECS Fargate with an Application Load Balancer,
+  deployed into an existing VPC.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Required
+        Parameters:
+          - ProjectName
+          - Environment
+          - DatabaseUri
+          - ContainerImageUri
+      - Label:
+          default: Networking (optional)
+        Parameters:
+          - VpcId
+          - SubnetId1
+          - SubnetId2
+          - Domain
+          - CertificateArn
+          - AlbIdleTimeout
+          - RdsSecurityGroupId
+      - Label:
+          default: Container (optional)
+        Parameters:
+          - McpTransport
+          - ContainerCpu
+          - ContainerMemory
+          - DesiredCount
+      - Label:
+          default: Tenant / Server Mode (optional)
+        Parameters:
+          - McpServerMode
+          - TenantAllowedRelations
+          - TenantAllowedTenantIds
+          - TenantMaxRowLimit
+          - TenantPrincipalId
+          - TenantContextGuc
+          - TenantHeaderName
+          - DisableDnsRebindingProtection
+          - McpAllowedHosts
+          - McpAllowedOrigins
+      - Label:
+          default: RDS IAM Authentication (optional)
+        Parameters:
+          - EnableRdsIamAuth
+          - RdsIamConnectArn
+      - Label:
+          default: VPC Endpoints (optional)
+        Parameters:
+          - CreateVpcEndpoints
+
+
+Parameters:
+
+  # ── Required ──────────────────────────────────────────────────────────────────
+
+  ProjectName:
+    Type: String
+    Description: Project name prefix for all resource names. Keep <= 16 characters.
+    MaxLength: 16
+    AllowedPattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+    ConstraintDescription: Lowercase alphanumeric and hyphens only, no leading/trailing hyphens.
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment.
+
+  DatabaseUri:
+    Type: String
+    NoEcho: true
+    Description: >-
+      PostgreSQL connection string (e.g. postgresql://user:pass@host:5432/dbname).
+      Stored as a Secrets Manager secret and injected as DATABASE_URI. The RDS
+      endpoint must be reachable from the specified VPC.
+
+  ContainerImageUri:
+    Type: String
+    Description: >-
+      Full ECR image URI from AWS Marketplace PostgresSQL Text-to-SQL MCP Server
+      (e.g., 709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v1.0.0).
+
+  # ── Networking ────────────────────────────────────────────────────────────────
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >-
+      ID of the existing VPC to deploy all resources into
+      (e.g. vpc-0f9c8a9f812ceda37).
+
+  SubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      ID of the first existing subnet (must have internet access for ALB and ECS tasks).
+      Must be in a different Availability Zone from SubnetId2.
+
+  SubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      ID of the second existing subnet (must have internet access for ALB and ECS tasks).
+      Must be in a different Availability Zone from SubnetId1.
+
+  RdsSecurityGroupId:
+    Type: String
+    Default: ""
+    Description: >-
+      Security group ID attached to the RDS PostgreSQL instance. An ingress rule is added
+      so ECS tasks can connect on port 5432. Run tests/find_db_vpc_cidr.sh <db-instance-id>
+      to find this value (e.g. sg-067fe8aa9f8b1c9cb).
+
+  Domain:
+    Type: String
+    Default: ""
+    Description: >-
+      Custom domain for host-based ALB routing (e.g., mcp-postgres.example.com).
+      Leave empty to use path-based routing via ALB DNS name (quick start / dev).
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate ARN for HTTPS. Required when Domain is set.
+
+  AlbIdleTimeout:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    MaxValue: 4000
+    Description: >-
+      ALB idle connection timeout in seconds. Use 3600+ for SSE long-lived connections.
+
+  # ── Container ─────────────────────────────────────────────────────────────────
+
+  McpTransport:
+    Type: String
+    Default: streamable-http
+    AllowedValues: [sse, streamable-http]
+    Description: >-
+      MCP transport protocol. The docker-entrypoint.sh auto-appends --sse-host=0.0.0.0
+      when sse is selected. For streamable-http, --streamable-http-host=0.0.0.0 is added.
+
+  ContainerCpu:
+    Type: String
+    Default: "256"
+    AllowedValues: ["256", "512", "1024", "2048", "4096"]
+    Description: Fargate task CPU units (256 = 0.25 vCPU).
+
+  ContainerMemory:
+    Type: String
+    Default: "512"
+    AllowedValues: ["512", "1024", "2048", "4096", "8192"]
+    Description: Fargate task memory in MiB.
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 10
+    Description: Number of ECS task replicas to keep running.
+
+  # ── Tenant / Server Mode ──────────────────────────────────────────────────────
+
+  McpServerMode:
+    Type: String
+    Default: tenant
+    AllowedValues: [admin, tenant]
+    Description: >-
+      MCP server mode injected as MCP_SERVER_MODE. Use tenant for multi-tenant
+      deployments or admin for unrestricted access. Leave empty to omit.
+
+  TenantAllowedRelations:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated schema.table relations the server may query. Leave empty to omit.
+      Example: analytics_app.customer_revenue_summary,analytics_app.daily_sales_summary,
+      analytics_app.product_sales_summary
+
+  TenantAllowedTenantIds:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated tenant IDs allowed to connect. Leave empty to omit.
+      Example: tenant-a,tenant-b
+
+  TenantMaxRowLimit:
+    Type: String
+    Default: "100"
+    Description: Maximum rows returned per tenant SQL query (TENANT_MAX_ROW_LIMIT).
+
+  TenantPrincipalId:
+    Type: String
+    Default: ""
+    Description: >-
+      Principal ID written into the auto-generated tenant config (TENANT_PRINCIPAL_ID).
+      Identifies the calling agent or service in the tenant context. Leave empty to omit.
+      Example: lambda-agent
+
+  TenantContextGuc:
+    Type: String
+    Default: ""
+    Description: >-
+      PostgreSQL GUC name used to propagate the tenant ID to queries (TENANT_CONTEXT_GUC).
+      The docker-entrypoint uses app.tenant_id when this is unset. Leave empty to use the default.
+
+  TenantHeaderName:
+    Type: String
+    Default: ""
+    Description: >-
+      HTTP header name the server reads the tenant ID from (TENANT_HEADER_NAME).
+      The docker-entrypoint uses x-tenant-id when this is unset. Leave empty to use the default.
+
+  DisableDnsRebindingProtection:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Sets MCP_DISABLE_DNS_REBINDING_PROTECTION=true to disable DNS rebinding checks entirely.
+      Required for plain-HTTP ALB deployments where the Host header is an ALB DNS name.
+      As an alternative, set McpAllowedHosts/McpAllowedOrigins instead of disabling protection.
+
+  McpAllowedHosts:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated Host header values allowed through DNS rebinding protection (MCP_ALLOWED_HOSTS).
+      Use this together with McpAllowedOrigins as a precise alternative to DisableDnsRebindingProtection.
+      Example: mcp.example.com,localhost:8000. Leave empty to omit.
+
+  McpAllowedOrigins:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated Origin header values allowed through DNS rebinding protection (MCP_ALLOWED_ORIGINS).
+      Use together with McpAllowedHosts as a precise alternative to DisableDnsRebindingProtection.
+      Example: https://mcp.example.com,http://localhost:8000. Leave empty to omit.
+
+  # ── RDS IAM Authentication ────────────────────────────────────────────────────
+
+  EnableRdsIamAuth:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Sets DATABASE_IAM_AUTH=true and enables RDS IAM token-based authentication.
+
+  RdsIamConnectArn:
+    Type: String
+    Default: ""
+    Description: >-
+      RDS IAM auth resource ARN granted to the ECS task role via rds-db:connect.
+      Example: arn:aws:rds-db:us-east-1:123456789012:dbuser:db-ABCDEFG/myuser.
+      Leave empty to skip the IAM policy.
+
+  CreateVpcEndpoints:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create VPC Interface Endpoints for ECR, Secrets Manager, and CloudWatch Logs.
+      Set to false (default) when the VPC already has these endpoints to avoid
+      conflicts with existing private DNS configurations.
+
+Conditions:
+  RdsSecurityGroupSet: !Not [!Equals [!Ref RdsSecurityGroupId, ""]]
+  UseHttps: !Not [!Equals [!Ref CertificateArn, ""]]
+  UseDomain: !Not [!Equals [!Ref Domain, ""]]
+  IsSseTransport: !Equals [!Ref McpTransport, "sse"]
+  ApiKeyEnabled: !Equals ["true", "true"]
+  RdsIamAuthEnabled: !Equals [!Ref EnableRdsIamAuth, "true"]
+  RdsIamConnectArnSet: !And
+    - !Condition RdsIamAuthEnabled
+    - !Not [!Equals [!Ref RdsIamConnectArn, ""]]
+  McpServerModeSet: !Not [!Equals [!Ref McpServerMode, ""]]
+  TenantRelationsSet: !Not [!Equals [!Ref TenantAllowedRelations, ""]]
+  TenantIdsSet: !Not [!Equals [!Ref TenantAllowedTenantIds, ""]]
+  TenantPrincipalIdSet: !Not [!Equals [!Ref TenantPrincipalId, ""]]
+  TenantContextGucSet: !Not [!Equals [!Ref TenantContextGuc, ""]]
+  TenantHeaderNameSet: !Not [!Equals [!Ref TenantHeaderName, ""]]
+  McpAllowedHostsSet: !Not [!Equals [!Ref McpAllowedHosts, ""]]
+  McpAllowedOriginsSet: !Not [!Equals [!Ref McpAllowedOrigins, ""]]
+  CreateVpcEndpoints: !Equals [!Ref CreateVpcEndpoints, "true"]
+
+Resources:
+
+  # ─── CloudWatch Logs ──────────────────────────────────────────────────────────
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - "/ecs/${ProjectName}/${Environment}/mcp-postgres-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  ClusterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub
+        - "/ecs/${ProjectName}/${Environment}/mcp-cluster-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── Database URI Secret ──────────────────────────────────────────────────────
+
+  DatabaseUriSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub
+        - "${ProjectName}/${Environment}/database-uri-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      Description: PostgreSQL connection string for the postgres-mcp server
+      SecretString: !Ref DatabaseUri
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── IAM: Task Execution Role ─────────────────────────────────────────────────
+  # Grants ECS agent permission to pull the ECR image, write logs, and fetch secrets.
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-exec-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: DatabaseSecretAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseUriSecret
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # Grants the execution role access to the generated API key secret (conditional).
+  ApiKeySecretAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: ApiKeyEnabled
+    DependsOn: ApiKeySecret
+    Properties:
+      PolicyName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-apikey-access-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Ref ApiKeySecret
+      Roles:
+        - !Ref TaskExecutionRole
+
+  # ─── IAM: Task Role ───────────────────────────────────────────────────────────
+  # Runtime role used by the running container (application permissions).
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-task-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # Allows the container to call rds-db:connect for IAM token auth (conditional).
+  RdsIamAuthPolicy:
+    Type: AWS::IAM::Policy
+    Condition: RdsIamConnectArnSet
+    Properties:
+      PolicyName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-rds-iam-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: rds-db:connect
+            Resource: !Ref RdsIamConnectArn
+      Roles:
+        - !Ref TaskRole
+
+  # Allows the container to register usage with AWS Marketplace at startup.
+  MarketplaceMeteringPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-marketplace-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: aws-marketplace:RegisterUsage
+            Resource: "*"
+      Roles:
+        - !Ref TaskRole
+
+  # ─── Optional: API Key ────────────────────────────────────────────────────────
+
+  ApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: ApiKeyEnabled
+    Properties:
+      Name: !Sub
+        - "${ProjectName}/${Environment}/postgres-mcp-api-key-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      Description: Auto-generated API key for postgres-mcp HTTP authentication
+      GenerateSecretString:
+        ExcludePunctuation: true
+        PasswordLength: 48
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── Security Groups ──────────────────────────────────────────────────────────
+
+  RdsPostgresIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: RdsSecurityGroupSet
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref EcsTaskSecurityGroup
+      Description: !Sub Allow Postgres from ${ProjectName}-${Environment}-mcp-postgres ECS tasks
+
+  # ─── VPC Interface Endpoints ─────────────────────────────────────────────────
+
+  VpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateVpcEndpoints
+    Properties:
+      GroupName: !Sub
+        - "${ProjectName}-${Environment}-mcp-vpc-endpoints-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      GroupDescription: Allows HTTPS from ECS tasks to VPC interface endpoints
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTPS from ECS tasks
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref EcsTaskSecurityGroup
+      SecurityGroupEgress:
+        - Description: Allow all outbound
+          IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "${ProjectName}-${Environment}-mcp-vpc-endpoints-${Uid}"
+            - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateVpcEndpoints
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub
+        - "${ProjectName}-${Environment}-mcp-alb-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      GroupDescription: Allows HTTP/HTTPS inbound from internet to the MCP ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTPS from internet
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+        - Description: HTTP from internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      SecurityGroupEgress:
+        - Description: Allow all outbound
+          IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "${ProjectName}-${Environment}-mcp-alb-${Uid}"
+            - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  EcsTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-ecs-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      GroupDescription: Allows inbound on port 8000 from ALB only - postgres-mcp ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: Container port from ALB
+          IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - Description: Allow all outbound (ECR, Secrets Manager, RDS)
+          IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "${ProjectName}-${Environment}-mcp-postgres-ecs-${Uid}"
+            - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── ECS Cluster ─────────────────────────────────────────────────────────────
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub
+        - "${ProjectName}-${Environment}-mcp-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "${ProjectName}-${Environment}-mcp-${Uid}"
+            - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── ECS Task Definition ─────────────────────────────────────────────────────
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: mcp-server
+          Image: !Ref ContainerImageUri
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Command: !If
+            - IsSseTransport
+            - ["--access-mode=restricted", "--transport=sse"]
+            - ["--access-mode=restricted", "--transport=streamable-http", "--streamable-http-host=0.0.0.0", "--streamable-http-port=8000"]
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: DATABASE_AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: DATABASE_IAM_AUTH
+              Value: !If [RdsIamAuthEnabled, "true", "false"]
+            - Name: MCP_API_KEY_HEADER
+              Value: x-api-key
+            - Name: MCP_DISABLE_DNS_REBINDING_PROTECTION
+              Value: !Ref DisableDnsRebindingProtection
+            - Name: TENANT_MAX_ROW_LIMIT
+              Value: !Ref TenantMaxRowLimit
+            - !If
+              - McpServerModeSet
+              - Name: MCP_SERVER_MODE
+                Value: !Ref McpServerMode
+              - !Ref AWS::NoValue
+            - !If
+              - TenantRelationsSet
+              - Name: TENANT_ALLOWED_RELATIONS
+                Value: !Ref TenantAllowedRelations
+              - !Ref AWS::NoValue
+            - !If
+              - TenantIdsSet
+              - Name: TENANT_ALLOWED_TENANT_IDS
+                Value: !Ref TenantAllowedTenantIds
+              - !Ref AWS::NoValue
+            - !If
+              - TenantPrincipalIdSet
+              - Name: TENANT_PRINCIPAL_ID
+                Value: !Ref TenantPrincipalId
+              - !Ref AWS::NoValue
+            - !If
+              - TenantContextGucSet
+              - Name: TENANT_CONTEXT_GUC
+                Value: !Ref TenantContextGuc
+              - !Ref AWS::NoValue
+            - !If
+              - TenantHeaderNameSet
+              - Name: TENANT_HEADER_NAME
+                Value: !Ref TenantHeaderName
+              - !Ref AWS::NoValue
+            - !If
+              - McpAllowedHostsSet
+              - Name: MCP_ALLOWED_HOSTS
+                Value: !Ref McpAllowedHosts
+              - !Ref AWS::NoValue
+            - !If
+              - McpAllowedOriginsSet
+              - Name: MCP_ALLOWED_ORIGINS
+                Value: !Ref McpAllowedOrigins
+              - !Ref AWS::NoValue
+          Secrets:
+            - Name: DATABASE_URI
+              ValueFrom: !Ref DatabaseUriSecret
+            - Name: MCP_API_KEY
+              ValueFrom: !Ref ApiKeySecret
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: mcp
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # ─── Application Load Balancer ────────────────────────────────────────────────
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref SubnetId1
+        - !Ref SubnetId2
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Sub "${AlbIdleTimeout}"
+        - Key: routing.http2.enabled
+          Value: "true"
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - "${ProjectName}-${Environment}-mcp-${Uid}"
+            - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # HTTP listener — redirects to HTTPS when a certificate is provided, otherwise serves directly.
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - UseHttps
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: "443"
+              StatusCode: HTTP_301
+          - Type: fixed-response
+            FixedResponseConfig:
+              ContentType: text/plain
+              MessageBody: No MCP server configured for this path
+              StatusCode: "404"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: UseHttps
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: text/plain
+            MessageBody: No MCP server configured for this host
+            StatusCode: "404"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # SSE-optimised target group: stickiness keeps long-lived SSE connections on the same task.
+  # Health check accepts 200 (healthy) and 401 (unauthenticated but alive).
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200,401"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+        - Key: stickiness.enabled
+          Value: "true"
+        - Key: stickiness.type
+          Value: lb_cookie
+        - Key: stickiness.lb_cookie.duration_seconds
+          Value: !Sub "${AlbIdleTimeout}"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+  # Single non-conditional listener rule — uses host-header when Domain is set,
+  # path-pattern otherwise. Non-conditional so EcsService can DependsOn it.
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !If [UseHttps, !Ref HttpsListener, !Ref HttpListener]
+      Priority: 100
+      Conditions:
+        - !If
+          - UseDomain
+          - Field: host-header
+            HostHeaderConfig:
+              Values:
+                - !Ref Domain
+          - Field: path-pattern
+            PathPatternConfig:
+              Values:
+                - "/*"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ─── ECS Service ─────────────────────────────────────────────────────────────
+
+  EcsService:
+    Type: AWS::ECS::Service
+    # DependsOn ListenerRule: ECS rejects a target group with no associated load balancer.
+    DependsOn:
+      - ListenerRule
+    Properties:
+      ServiceName: !Sub
+        - "${ProjectName}-${Environment}-mcp-postgres-${Uid}"
+        - Uid: !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
+      Cluster: !Ref EcsCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+              - !Ref SubnetId1
+              - !Ref SubnetId2
+          SecurityGroups:
+            - !Ref EcsTaskSecurityGroup
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - TargetGroupArn: !Ref TargetGroup
+          ContainerName: mcp-server
+          ContainerPort: 8000
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: aws-apn-id
+          Value: "pc:b7wum4qr0f6s6py6uurg34je8"
+
+Outputs:
+
+  McpEndpointUrl:
+    Description: MCP server endpoint URL
+    Value: !If
+      - UseDomain
+      - !If
+        - UseHttps
+        - !Join ["", ["https://", !Ref Domain, !If [IsSseTransport, "/sse", "/mcp"]]]
+        - !Join ["", ["http://", !Ref Domain, !If [IsSseTransport, "/sse", "/mcp"]]]
+      - !Join ["", ["http://", !GetAtt LoadBalancer.DNSName, !If [IsSseTransport, "/sse", "/mcp"]]]
+
+  LoadBalancerDnsName:
+    Description: ALB DNS name - create a CNAME from your Domain to this value
+    Value: !GetAtt LoadBalancer.DNSName
+
+  EcsClusterName:
+    Description: ECS cluster name
+    Value: !Ref EcsCluster
+
+  EcsServiceArn:
+    Description: ECS service ARN
+    Value: !Ref EcsService
+
+  EcsServiceName:
+    Description: ECS service name
+    Value: !GetAtt EcsService.Name
+
+  TaskDefinitionArn:
+    Description: ECS task definition ARN (latest active revision)
+    Value: !Ref TaskDefinition
+
+  EcsTaskSecurityGroupId:
+    Description: Security group ID attached to ECS tasks
+    Value: !Ref EcsTaskSecurityGroup
+
+  TargetGroupArn:
+    Description: ALB target group ARN
+    Value: !Ref TargetGroup
+
+  CloudWatchLogGroup:
+    Description: CloudWatch log group for container logs
+    Value: !Ref LogGroup
+
+  ApiKeySecretArn:
+    Condition: ApiKeyEnabled
+    Description: Secrets Manager ARN of the auto-generated API key
+    Value: !Ref ApiKeySecret

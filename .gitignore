@@ -220,3 +220,5 @@ __marimo__/
 .deploy_views_mcp_cf.sh
 .deploy_agentcore_agent_cf.sh
 .deepeval
+.deploy_admin_mcp_cf_new_vpc.sh
+.deploy_views_mcp_cf_new_vpc.sh

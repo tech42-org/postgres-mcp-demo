@@ -1,14 +1,20 @@
 #!/bin/bash
-# Deploy (create or update) the postgres-mcp ECS CloudFormation stack in admin mode.
-# Admin mode has no multi-tenant restrictions — full database access.
+# Deploy (create or update) the postgres-mcp ECS CloudFormation stack.
+# Deploys into an existing VPC; VPC ID and RDS security group are auto-discovered
+# from the RDS instance specified by DB_IDENTIFIER.
 #
 # Usage:
-#   ./deploy_admin_mcp_cf.sh
+#   ./deploy_postgres_mcp_ecs_cf.sh
 #
 # Override any variable inline:
-#   STACK_NAME=my-stack ./deploy_admin_mcp_cf.sh
+#   DB_IDENTIFIER=my-db DATABASE_URI="postgresql://..." ./deploy_postgres_mcp_ecs_cf.sh
+#
+# Subnets are auto-discovered from the DB subnet group; override if needed:
+#   SUBNET_ID1=subnet-aaa SUBNET_ID2=subnet-bbb ./deploy_postgres_mcp_ecs_cf.sh
 
 set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Stack identity ─────────────────────────────────────────────────────────────
 STACK_NAME="${STACK_NAME:-demo-postgres-mcp-admin}"
@@ -20,53 +26,18 @@ TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.am
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-admin}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v1.0.0}"
-DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
 DATABASE_URI="${DATABASE_URI:-postgresql://demo_admin:tFxRJzMem2Zq53FgjBKX7rOqndIOlAJt@postgres-mcp-demo-dev-demo-postgres-mcp.chgehfuhoilf.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
+DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
 
 # ── Networking ─────────────────────────────────────────────────────────────────
-# Use a different CIDR block to avoid conflicts with the views stack (10.42.x.x)
-VPC_CIDR="${VPC_CIDR:-10.43.0.0/16}"
-PUBLIC_SUBNET_1_CIDR="${PUBLIC_SUBNET_1_CIDR:-10.43.1.0/24}"
-PUBLIC_SUBNET_2_CIDR="${PUBLIC_SUBNET_2_CIDR:-10.43.2.0/24}"
-PEER_VPC_ROUTE_TABLE_IDS="${PEER_VPC_ROUTE_TABLE_IDS:-}"
+# DB_IDENTIFIER is required — VPC_ID, RDS_SECURITY_GROUP_ID, and subnets are all
+# auto-discovered from it. Override SUBNET_ID1/SUBNET_ID2 to use specific subnets.
+SUBNET_ID1="${SUBNET_ID1:-}"
+SUBNET_ID2="${SUBNET_ID2:-}"
 
-# ── RDS VPC lookup ─────────────────────────────────────────────────────────────
-if [ -n "$DB_IDENTIFIER" ]; then
-  echo "Looking up VPC info for RDS instance '${DB_IDENTIFIER}'..."
-  DB_INFO=$(AWS_PROFILE="$AWS_PROFILE" aws rds describe-db-instances \
-    --db-instance-identifier "$DB_IDENTIFIER" \
-    --region "$AWS_REGION" \
-    --query "DBInstances[0].{VpcId:DBSubnetGroup.VpcId,SgIds:VpcSecurityGroups[*].VpcSecurityGroupId}" \
-    --output json)
-
-  _PEER_VPC_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['VpcId'])")
-  _RDS_SG_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['SgIds'][0])")
-
-  if [ -z "$_PEER_VPC_ID" ] || [ "$_PEER_VPC_ID" = "None" ]; then
-    echo "ERROR: Could not find VPC for DB instance '${DB_IDENTIFIER}'." >&2
-    exit 1
-  fi
-
-  _PEER_VPC_CIDR=$(AWS_PROFILE="$AWS_PROFILE" aws ec2 describe-vpcs \
-    --vpc-ids "$_PEER_VPC_ID" \
-    --region "$AWS_REGION" \
-    --query "Vpcs[0].CidrBlock" \
-    --output text)
-
-  PEER_VPC_ID="${PEER_VPC_ID:-$_PEER_VPC_ID}"
-  PEER_VPC_CIDR="${PEER_VPC_CIDR:-$_PEER_VPC_CIDR}"
-  RDS_SECURITY_GROUP_ID="${RDS_SECURITY_GROUP_ID:-$_RDS_SG_ID}"
-  echo "  VPC ID:       ${PEER_VPC_ID}"
-  echo "  VPC CIDR:     ${PEER_VPC_CIDR}"
-  echo "  Security GID: ${RDS_SECURITY_GROUP_ID}"
-else
-  PEER_VPC_ID="${PEER_VPC_ID:-}"
-  PEER_VPC_CIDR="${PEER_VPC_CIDR:-}"
-  RDS_SECURITY_GROUP_ID="${RDS_SECURITY_GROUP_ID:-}"
-fi
 DOMAIN="${DOMAIN:-}"
 CERTIFICATE_ARN="${CERTIFICATE_ARN:-}"
-ALB_IDLE_TIMEOUT="${ALB_IDLE_TIMEOUT:-300}"
+ALB_IDLE_TIMEOUT="${ALB_IDLE_TIMEOUT:-3600}"
 
 # ── Container ──────────────────────────────────────────────────────────────────
 MCP_TRANSPORT="${MCP_TRANSPORT:-streamable-http}"
@@ -90,6 +61,51 @@ MCP_ALLOWED_ORIGINS="${MCP_ALLOWED_ORIGINS:-}"
 ENABLE_RDS_IAM_AUTH="${ENABLE_RDS_IAM_AUTH:-false}"
 RDS_IAM_CONNECT_ARN="${RDS_IAM_CONNECT_ARN:-}"
 
+
+# ── Validation ─────────────────────────────────────────────────────────────────
+if [ -z "$DATABASE_URI" ]; then
+  echo "ERROR: DATABASE_URI is required." >&2
+  exit 1
+fi
+if [ -z "$DB_IDENTIFIER" ]; then
+  echo "ERROR: DB_IDENTIFIER is required (used to auto-discover VPC_ID and RDS_SECURITY_GROUP_ID)." >&2
+  exit 1
+fi
+
+# ── Auto-discover VPC ID, subnets, and RDS security group from DB instance ──────
+echo "Looking up VPC info for RDS instance '${DB_IDENTIFIER}'..."
+DB_INFO=$(AWS_PROFILE="$AWS_PROFILE" aws rds describe-db-instances \
+  --db-instance-identifier "$DB_IDENTIFIER" \
+  --region "$AWS_REGION" \
+  --query "DBInstances[0].{VpcId:DBSubnetGroup.VpcId,SgId:VpcSecurityGroups[0].VpcSecurityGroupId,Subnets:DBSubnetGroup.Subnets[*].SubnetIdentifier}" \
+  --output json)
+
+VPC_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['VpcId'])")
+RDS_SECURITY_GROUP_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['SgId'])")
+_SUBNET1=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['Subnets'][0])")
+_SUBNET2=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['Subnets'][1])")
+
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "None" ]; then
+  echo "ERROR: Could not find VPC for DB instance '${DB_IDENTIFIER}'." >&2
+  exit 1
+fi
+if [ -z "$RDS_SECURITY_GROUP_ID" ] || [ "$RDS_SECURITY_GROUP_ID" = "None" ]; then
+  echo "ERROR: Could not find security group for DB instance '${DB_IDENTIFIER}'." >&2
+  exit 1
+fi
+if [ -z "$_SUBNET1" ] || [ -z "$_SUBNET2" ] || [ "$_SUBNET1" = "None" ] || [ "$_SUBNET2" = "None" ]; then
+  echo "ERROR: DB instance '${DB_IDENTIFIER}' subnet group has fewer than 2 subnets." >&2
+  exit 1
+fi
+
+SUBNET_ID1="${SUBNET_ID1:-$_SUBNET1}"
+SUBNET_ID2="${SUBNET_ID2:-$_SUBNET2}"
+
+echo "  VPC ID:             ${VPC_ID}"
+echo "  Subnet 1:           ${SUBNET_ID1}"
+echo "  Subnet 2:           ${SUBNET_ID2}"
+echo "  RDS Security Group: ${RDS_SECURITY_GROUP_ID}"
+
 # ── Deploy ─────────────────────────────────────────────────────────────────────
 echo "Deploying stack '${STACK_NAME}' in region '${AWS_REGION}' using profile '${AWS_PROFILE}'..."
 echo "Template: ${TEMPLATE_URL}"
@@ -103,12 +119,9 @@ cat > "$PARAMS_FILE" << EOF
   {"ParameterKey": "Environment",                   "ParameterValue": "${ENVIRONMENT}"},
   {"ParameterKey": "DatabaseUri",                   "ParameterValue": "${DATABASE_URI}"},
   {"ParameterKey": "ContainerImageUri",             "ParameterValue": "${CONTAINER_IMAGE_URI}"},
-  {"ParameterKey": "VpcCidr",                       "ParameterValue": "${VPC_CIDR}"},
-  {"ParameterKey": "PublicSubnet1Cidr",             "ParameterValue": "${PUBLIC_SUBNET_1_CIDR}"},
-  {"ParameterKey": "PublicSubnet2Cidr",             "ParameterValue": "${PUBLIC_SUBNET_2_CIDR}"},
-  {"ParameterKey": "PeerVpcId",                     "ParameterValue": "${PEER_VPC_ID}"},
-  {"ParameterKey": "PeerVpcCidr",                   "ParameterValue": "${PEER_VPC_CIDR}"},
-  {"ParameterKey": "PeerVpcRouteTableIds",          "ParameterValue": "${PEER_VPC_ROUTE_TABLE_IDS}"},
+  {"ParameterKey": "VpcId",                         "ParameterValue": "${VPC_ID}"},
+  {"ParameterKey": "SubnetId1",                     "ParameterValue": "${SUBNET_ID1}"},
+  {"ParameterKey": "SubnetId2",                     "ParameterValue": "${SUBNET_ID2}"},
   {"ParameterKey": "RdsSecurityGroupId",            "ParameterValue": "${RDS_SECURITY_GROUP_ID}"},
   {"ParameterKey": "Domain",                        "ParameterValue": "${DOMAIN}"},
   {"ParameterKey": "CertificateArn",                "ParameterValue": "${CERTIFICATE_ARN}"},

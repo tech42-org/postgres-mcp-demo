@@ -74,7 +74,7 @@ Key outputs written to state:
 
 ### Step 2 — Deploy the MCP servers
 
-Both scripts automatically look up the RDS VPC ID, VPC CIDR, and security group from the deployed RDS instance. You must supply `DATABASE_URI` by fetching the connection string from Secrets Manager first.
+Both scripts deploy into the existing RDS VPC. They automatically discover the VPC ID, subnets, and RDS security group from the deployed RDS instance using `DB_IDENTIFIER`. You must supply `DATABASE_URI` by fetching the connection string from Secrets Manager first.
 
 Retrieve the URIs from the Terraform outputs:
 
@@ -125,20 +125,24 @@ VIEWS_MCP_URL=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
   --output text)
 
-VIEWS_MCP_API_KEY=$(aws cloudformation describe-stacks \
-  --stack-name demo-postgres-mcp-views \
-  --query 'Stacks[0].Outputs[?OutputKey==`ApiKey`].OutputValue' \
-  --output text)
+VIEWS_MCP_API_KEY=$(aws secretsmanager get-secret-value \
+  --secret-id $(aws cloudformation describe-stacks \
+    --stack-name demo-postgres-mcp-views \
+    --query 'Stacks[0].Outputs[?OutputKey==`ApiKeySecretArn`].OutputValue' \
+    --output text) \
+  --query SecretString --output text)
 
 ADMIN_MCP_URL=$(aws cloudformation describe-stacks \
   --stack-name demo-postgres-mcp-admin \
   --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
   --output text)
 
-ADMIN_MCP_API_KEY=$(aws cloudformation describe-stacks \
-  --stack-name demo-postgres-mcp-admin \
-  --query 'Stacks[0].Outputs[?OutputKey==`ApiKey`].OutputValue' \
-  --output text)
+ADMIN_MCP_API_KEY=$(aws secretsmanager get-secret-value \
+  --secret-id $(aws cloudformation describe-stacks \
+    --stack-name demo-postgres-mcp-admin \
+    --query 'Stacks[0].Outputs[?OutputKey==`ApiKeySecretArn`].OutputValue' \
+    --output text) \
+  --query SecretString --output text)
 ```
 
 Open `deploy_demo_app.sh`, fill in the five exported variables at the top with the values above, then run:
