@@ -48,7 +48,24 @@ Click **Subscribe** on each product page before deploying.
 
 ## Deploy
 
-### Step 1 — Deploy the demo database
+### Step 1 — Bootstrap remote state (one-time per account)
+
+Terraform state is stored in S3. Before the first deploy in a new AWS account, create the S3 bucket and DynamoDB lock table:
+
+```bash
+AWS_PROFILE=my-profile ./terraform/bootstrap/bootstrap.sh
+```
+
+The script prints the values to put in `terraform/backend.hcl`. Copy the example and fill them in:
+
+```bash
+cp terraform/backend.hcl.example terraform/backend.hcl
+# edit terraform/backend.hcl with the values printed above
+```
+
+`backend.hcl` is git-ignored — each account gets its own file. For multiple accounts on one machine, use named files (`backend.prod.hcl`) and pass `BACKEND_CONFIG=terraform/backend.prod.hcl` when deploying.
+
+### Step 2 — Deploy the demo database
 
 ```bash
 ./deploy_demo_db_tf.sh
@@ -61,6 +78,7 @@ Override defaults inline if needed:
 ```bash
 AWS_PROFILE=my-profile AWS_REGION=us-west-2 ./deploy_demo_db_tf.sh
 TFVARS_FILE=terraform/custom.tfvars ./deploy_demo_db_tf.sh
+BACKEND_CONFIG=terraform/backend.prod.hcl ./deploy_demo_db_tf.sh
 ```
 
 Key outputs written to state:
@@ -72,7 +90,7 @@ Key outputs written to state:
 | `demo_postgres_mcp_raw_database_uri_secret_arn` | Raw read-only role URI |
 | `demo_postgres_mcp_views_database_uri_secret_arn` | Views read-only role URI |
 
-### Step 2 — Deploy the MCP servers
+### Step 3 — Deploy the MCP servers
 
 Both scripts deploy into the existing RDS VPC. They automatically discover the VPC ID, subnets, and RDS security group from the deployed RDS instance using `DB_IDENTIFIER`. You must supply `DATABASE_URI` by fetching the connection string from Secrets Manager first.
 
@@ -102,13 +120,13 @@ DATABASE_URI="$ADMIN_DATABASE_URI" ./deploy_admin_mcp_cf.sh
 
 Both scripts handle create vs. update automatically and delete/recreate if the stack is in `ROLLBACK_COMPLETE`. Stack outputs including the MCP endpoint URL are printed on completion.
 
-### Step 3 — Deploy the AgentCore agent runtime
+### Step 4 — Deploy the AgentCore agent runtime
 
 ```bash
 ./deploy_agentcore_agent_cf.sh
 ```
 
-### Step 4 — Run the demo app
+### Step 5 — Run the demo app
 
 The demo app is a local web UI that streams AgentCore responses via Server-Sent Events. It requires Python 3.9+ and the values output by the previous steps.
 
@@ -178,6 +196,7 @@ done
 Destroy the RDS database and supporting infrastructure:
 
 ```bash
-cd terraform
-terraform destroy -var-file=demo.tfvars
+terraform -chdir=terraform destroy \
+  -var-file=demo.tfvars \
+  -backend-config=terraform/backend.hcl
 ```

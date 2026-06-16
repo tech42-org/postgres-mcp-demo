@@ -5,3 +5,5 @@
 *.zip
 lambda/__pycache__/
 .terraform.lock.hcl
+backend.hcl
+backend.*.hcl

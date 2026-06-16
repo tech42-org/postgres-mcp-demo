@@ -6,10 +6,9 @@ demo_postgres_mcp_seed_scale_factor      = 2
 demo_postgres_mcp_run_schema_initializer = true
 
 demo_postgres_mcp_subnet_ids = [
-  "subnet-055e78fe02d648191",
-  "subnet-09d5131dc6363f613",
-  "subnet-0d9c57c0d0892ec8d",
-  "subnet-0c1b89aba4b234aa9",
-  "subnet-073367497c300306b",
-  "subnet-04a19e1c54a45a181",
+  "subnet-00b878b8ab2dd3b56",
+  "subnet-0153e9727904b13c8",
+  "subnet-0c410b2a24e741075",
+  "subnet-09f33d9fd40d6e6de",
+  "subnet-07508893604fd8f70",
 ]

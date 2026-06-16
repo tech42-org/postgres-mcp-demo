@@ -17,6 +17,7 @@ TF_DIR="${SCRIPT_DIR}/terraform"
 AWS_PROFILE="${AWS_PROFILE:-tech-42}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TFVARS_FILE="${TFVARS_FILE:-${TF_DIR}/demo.tfvars}"
+BACKEND_CONFIG="${BACKEND_CONFIG:-${TF_DIR}/backend.hcl}"
 
 export AWS_PROFILE AWS_REGION
 
@@ -32,15 +33,23 @@ if [ ! -f "$TFVARS_FILE" ]; then
   exit 1
 fi
 
+if [ ! -f "$BACKEND_CONFIG" ]; then
+  echo "Error: backend config not found: ${BACKEND_CONFIG}" >&2
+  echo "Copy terraform/backend.hcl.example to terraform/backend.hcl and fill in your values." >&2
+  echo "Then run terraform/bootstrap/bootstrap.sh to create the S3 bucket and DynamoDB table." >&2
+  exit 1
+fi
+
 # ── Deploy ─────────────────────────────────────────────────────────────────────
 echo "Deploying demo database using Terraform..."
-echo "  Directory : ${TF_DIR}"
-echo "  Vars file : ${TFVARS_FILE}"
-echo "  Profile   : ${AWS_PROFILE}"
-echo "  Region    : ${AWS_REGION}"
+echo "  Directory      : ${TF_DIR}"
+echo "  Vars file      : ${TFVARS_FILE}"
+echo "  Backend config : ${BACKEND_CONFIG}"
+echo "  Profile        : ${AWS_PROFILE}"
+echo "  Region         : ${AWS_REGION}"
 echo ""
 
-terraform -chdir="$TF_DIR" init -upgrade
+terraform -chdir="$TF_DIR" init -upgrade -backend-config="$BACKEND_CONFIG"
 
 terraform -chdir="$TF_DIR" apply \
   -var-file="$TFVARS_FILE" \

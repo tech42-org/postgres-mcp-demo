@@ -1,0 +1,13 @@
+# backend.hcl.example
+# Copy this file to backend.hcl (git-ignored) and fill in your values.
+# Then run: terraform init -backend-config=backend.hcl
+#
+# Run terraform/bootstrap/bootstrap.sh first to create the S3 bucket and
+# DynamoDB lock table in the target AWS account.
+
+bucket         = "postgres-mcp-demo-tfstate-<ACCOUNT_ID>"
+key            = "postgres-mcp-demo/<ENVIRONMENT>/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "postgres-mcp-demo-tfstate-lock"
+# profile      = "my-aws-profile"   # remove if using env vars or instance role
+encrypt        = true

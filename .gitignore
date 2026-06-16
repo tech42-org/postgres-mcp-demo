@@ -222,3 +222,4 @@ __marimo__/
 .deepeval
 .deploy_admin_mcp_cf_new_vpc.sh
 .deploy_views_mcp_cf_new_vpc.sh
+terraform/.terraform.lock.hcl
