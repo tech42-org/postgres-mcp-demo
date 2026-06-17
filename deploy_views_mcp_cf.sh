@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Stack identity ─────────────────────────────────────────────────────────────
 STACK_NAME="${STACK_NAME:-demo-postgres-mcp-views}"
-AWS_PROFILE="${AWS_PROFILE:-tech-42}"
+AWS_PROFILE="${AWS_PROFILE:-sandbox}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.amazonaws.com/postgres-mcp-ecs.yaml}"
 
@@ -26,8 +26,8 @@ TEMPLATE_URL="${TEMPLATE_URL:-https://tech42-text2sql-mcp-deployment-asset.s3.am
 PROJECT_NAME="${PROJECT_NAME:-demo-mcp-views}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 CONTAINER_IMAGE_URI="${CONTAINER_IMAGE_URI:-709825985650.dkr.ecr.us-east-1.amazonaws.com/tech-42/postgres-text2sql-mcp:v1.0.0}"
-DATABASE_URI="${DATABASE_URI:-postgresql://text_to_sql_views_ro:s7XxNSzJaKNtGj8XerZqyV0tNKZYRhGY@postgres-mcp-demo-dev-demo-postgres-mcp.chgehfuhoilf.us-east-1.rds.amazonaws.com:5432/demo_postgres_mcp}"
 DB_IDENTIFIER="${DB_IDENTIFIER:-postgres-mcp-demo-dev-demo-postgres-mcp}"
+DB_URI_SECRET_ARN="${DB_URI_SECRET_ARN:-arn:aws:secretsmanager:us-east-1:008701887645:secret:postgres-mcp-demo-dev/demo-postgres-mcp/views-database-uri-rkPjrU}"
 
 # ── Networking ─────────────────────────────────────────────────────────────────
 # DB_IDENTIFIER is required — VPC_ID, RDS_SECURITY_GROUP_ID, and subnets are all
@@ -61,12 +61,18 @@ MCP_ALLOWED_ORIGINS="${MCP_ALLOWED_ORIGINS:-}"
 ENABLE_RDS_IAM_AUTH="${ENABLE_RDS_IAM_AUTH:-false}"
 RDS_IAM_CONNECT_ARN="${RDS_IAM_CONNECT_ARN:-}"
 
+# ── VPC Endpoints ──────────────────────────────────────────────────────────────
+# The VPC already has interface endpoints for Secrets Manager, ECR, and CloudWatch
+# Logs (CreateVpcEndpoints=false avoids DNS conflicts). Instead, we add an ingress
+# rule to the existing shared endpoint SG so ECS tasks can reach those endpoints.
+# VPC_ENDPOINT_SECURITY_GROUP_ID is auto-discovered from the existing Secrets Manager
+# endpoint in the VPC; override it if your setup uses a different security group.
+CREATE_VPC_ENDPOINTS="${CREATE_VPC_ENDPOINTS:-false}"
+VPC_ENDPOINT_SECURITY_GROUP_ID="${VPC_ENDPOINT_SECURITY_GROUP_ID:-}"
+VPC_ENDPOINT_SECURITY_GROUP_ID2="${VPC_ENDPOINT_SECURITY_GROUP_ID2:-}"
+
 
 # ── Validation ─────────────────────────────────────────────────────────────────
-if [ -z "$DATABASE_URI" ]; then
-  echo "ERROR: DATABASE_URI is required." >&2
-  exit 1
-fi
 if [ -z "$DB_IDENTIFIER" ]; then
   echo "ERROR: DB_IDENTIFIER is required (used to auto-discover VPC_ID and RDS_SECURITY_GROUP_ID)." >&2
   exit 1
@@ -84,6 +90,22 @@ VPC_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdi
 RDS_SECURITY_GROUP_ID=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['SgId'])")
 _SUBNET1=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['Subnets'][0])")
 _SUBNET2=$(echo "$DB_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['Subnets'][1])")
+# Fetch DATABASE_URI from Terraform-managed Secrets Manager secret if not explicitly set
+if [ -z "$DATABASE_URI" ] && [ -n "$DB_URI_SECRET_ARN" ]; then
+  echo "Fetching DATABASE_URI from Secrets Manager..."
+  DATABASE_URI=$(AWS_PROFILE="$AWS_PROFILE" aws secretsmanager get-secret-value \
+    --secret-id "$DB_URI_SECRET_ARN" \
+    --region "$AWS_REGION" \
+    --query "SecretString" --output text 2>/dev/null)
+fi
+# Append sslmode=require for RDS (required by pg_hba.conf hostssl rules)
+if [ -n "$DATABASE_URI" ] && ! echo "$DATABASE_URI" | grep -q "sslmode"; then
+  DATABASE_URI="${DATABASE_URI}?sslmode=require"
+fi
+if [ -z "$DATABASE_URI" ]; then
+  echo "ERROR: Could not resolve DATABASE_URI — set DATABASE_URI or DB_URI_SECRET_ARN." >&2
+  exit 1
+fi
 
 if [ -z "$VPC_ID" ] || [ "$VPC_ID" = "None" ]; then
   echo "ERROR: Could not find VPC for DB instance '${DB_IDENTIFIER}'." >&2
@@ -101,14 +123,40 @@ fi
 SUBNET_ID1="${SUBNET_ID1:-$_SUBNET1}"
 SUBNET_ID2="${SUBNET_ID2:-$_SUBNET2}"
 
+# Auto-discover existing VPC endpoint security groups (used when CreateVpcEndpoints=false).
+# Queries the Secrets Manager endpoint SG and the ECR endpoint SG separately because
+# they may differ. Override either variable to skip auto-discovery.
+if [ -z "$VPC_ENDPOINT_SECURITY_GROUP_ID" ]; then
+  VPC_ENDPOINT_SECURITY_GROUP_ID=$(AWS_PROFILE="$AWS_PROFILE" aws ec2 describe-vpc-endpoints \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+              "Name=service-name,Values=com.amazonaws.${AWS_REGION}.secretsmanager" \
+              "Name=vpc-endpoint-state,Values=available" \
+    --query "VpcEndpoints[0].Groups[0].GroupId" \
+    --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+  [ "$VPC_ENDPOINT_SECURITY_GROUP_ID" = "None" ] && VPC_ENDPOINT_SECURITY_GROUP_ID=""
+fi
+
+if [ -z "$VPC_ENDPOINT_SECURITY_GROUP_ID2" ]; then
+  VPC_ENDPOINT_SECURITY_GROUP_ID2=$(AWS_PROFILE="$AWS_PROFILE" aws ec2 describe-vpc-endpoints \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+              "Name=service-name,Values=com.amazonaws.${AWS_REGION}.ecr.api" \
+              "Name=vpc-endpoint-state,Values=available" \
+    --query "VpcEndpoints[0].Groups[0].GroupId" \
+    --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+  [ "$VPC_ENDPOINT_SECURITY_GROUP_ID2" = "None" ] && VPC_ENDPOINT_SECURITY_GROUP_ID2=""
+  # If ECR SG matches Secrets Manager SG, no need for a second rule
+  [ "$VPC_ENDPOINT_SECURITY_GROUP_ID2" = "$VPC_ENDPOINT_SECURITY_GROUP_ID" ] && VPC_ENDPOINT_SECURITY_GROUP_ID2=""
+fi
+
 echo "  VPC ID:             ${VPC_ID}"
 echo "  Subnet 1:           ${SUBNET_ID1}"
 echo "  Subnet 2:           ${SUBNET_ID2}"
 echo "  RDS Security Group: ${RDS_SECURITY_GROUP_ID}"
+[ -n "$VPC_ENDPOINT_SECURITY_GROUP_ID" ]  && echo "  VPC Endpoint SG:    ${VPC_ENDPOINT_SECURITY_GROUP_ID}"
+[ -n "$VPC_ENDPOINT_SECURITY_GROUP_ID2" ] && echo "  VPC Endpoint SG2:   ${VPC_ENDPOINT_SECURITY_GROUP_ID2}"
 
 # ── Deploy ─────────────────────────────────────────────────────────────────────
 echo "Deploying stack '${STACK_NAME}' in region '${AWS_REGION}' using profile '${AWS_PROFILE}'..."
-echo "Template: ${TEMPLATE_URL}"
 
 PARAMS_FILE="$(mktemp /tmp/cf-params-XXXXXX)"
 trap 'rm -f "$PARAMS_FILE"' EXIT
@@ -141,7 +189,10 @@ cat > "$PARAMS_FILE" << EOF
   {"ParameterKey": "McpAllowedHosts",               "ParameterValue": "${MCP_ALLOWED_HOSTS}"},
   {"ParameterKey": "McpAllowedOrigins",             "ParameterValue": "${MCP_ALLOWED_ORIGINS}"},
   {"ParameterKey": "EnableRdsIamAuth",              "ParameterValue": "${ENABLE_RDS_IAM_AUTH}"},
-  {"ParameterKey": "RdsIamConnectArn",              "ParameterValue": "${RDS_IAM_CONNECT_ARN}"}
+  {"ParameterKey": "RdsIamConnectArn",              "ParameterValue": "${RDS_IAM_CONNECT_ARN}"},
+  {"ParameterKey": "CreateVpcEndpoints",            "ParameterValue": "${CREATE_VPC_ENDPOINTS}"},
+  {"ParameterKey": "VpcEndpointSecurityGroupId",    "ParameterValue": "${VPC_ENDPOINT_SECURITY_GROUP_ID}"},
+  {"ParameterKey": "VpcEndpointSecurityGroupId2",   "ParameterValue": "${VPC_ENDPOINT_SECURITY_GROUP_ID2}"}
 ]
 EOF
 
@@ -167,10 +218,19 @@ else
   WAIT_ACTION="stack-update-complete"
 fi
 
+LOCAL_TEMPLATE="${SCRIPT_DIR}/postgres-mcp-ecs.yaml"
+if [ -f "$LOCAL_TEMPLATE" ]; then
+  TEMPLATE_ARG="--template-body file://${LOCAL_TEMPLATE}"
+  echo "Using local template: ${LOCAL_TEMPLATE}"
+else
+  TEMPLATE_ARG="--template-url ${TEMPLATE_URL}"
+  echo "Using S3 template: ${TEMPLATE_URL}"
+fi
+
 set +e
 RESULT=$(AWS_PROFILE="$AWS_PROFILE" aws cloudformation "$ACTION" \
   --stack-name "$STACK_NAME" \
-  --template-url "$TEMPLATE_URL" \
+  $TEMPLATE_ARG \
   --region "$AWS_REGION" \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameters "file://${PARAMS_FILE}" 2>&1)

@@ -14,10 +14,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TF_DIR="${SCRIPT_DIR}/terraform"
 
-AWS_PROFILE="${AWS_PROFILE:-tech-42}"
+AWS_PROFILE="${AWS_PROFILE:-sandbox}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 TFVARS_FILE="${TFVARS_FILE:-${TF_DIR}/demo.tfvars}"
-BACKEND_CONFIG="${BACKEND_CONFIG:-${TF_DIR}/backend.hcl}"
+BACKEND_CONFIG="${BACKEND_CONFIG:-${TF_DIR}/backend.sandbox.hcl}"
 
 export AWS_PROFILE AWS_REGION
 
@@ -49,7 +49,7 @@ echo "  Profile        : ${AWS_PROFILE}"
 echo "  Region         : ${AWS_REGION}"
 echo ""
 
-terraform -chdir="$TF_DIR" init -upgrade -backend-config="$BACKEND_CONFIG"
+terraform -chdir="$TF_DIR" init -upgrade -reconfigure -backend-config="$BACKEND_CONFIG"
 
 terraform -chdir="$TF_DIR" apply \
   -var-file="$TFVARS_FILE" \

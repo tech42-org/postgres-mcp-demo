@@ -2,12 +2,20 @@
 
 **Live demo: [sqlagent.tech42demo.com](https://sqlagent.tech42demo.com/)**
 
+**Business query** — ask a natural-language question, get SQL-generated results:
+
+![Business query](assets/business_query.png)
+
+**DB optimization** — inspect and optimize queries across the full schema:
+
+![DB optimization](assets/db_optimization.png)
+
 Demo of AWS AgentCore invoking a PostgreSQL database through the Postgres MCP server using text-to-SQL. The agent runs on AWS Bedrock AgentCore and queries a multi-tenant analytics database via two MCP server deployments — one tenant-scoped (Views) and one unrestricted (Admin).
 
 ## Architecture
 
 ```
-Browser / Demo App  (deploy_demo_app.sh)
+Jupyter Notebook  (text2sql_postgres_mcp_example.ipynb)
       │
       ▼
 AWS Bedrock AgentCore Runtime  (deploy_agentcore_agent_cf.sh)
@@ -18,16 +26,6 @@ AWS Bedrock AgentCore Runtime  (deploy_agentcore_agent_cf.sh)
                     ▼
             PostgreSQL (RDS)  (deploy_demo_db_tf.sh)
 ```
-
-## Demo
-
-**Business query** — ask a natural-language question, get SQL-generated results:
-
-![Business query](assets/business_query.png)
-
-**DB optimization** — inspect and optimize queries across the full schema:
-
-![DB optimization](assets/db_optimization.png)
 
 ## Prerequisites
 
@@ -44,7 +42,7 @@ Click **Subscribe** on each product page before deploying.
 
 - AWS CLI v2 configured with a profile that has CloudFormation, ECS, ECR, RDS, Secrets Manager, and Bedrock permissions
 - Terraform >= 1.5
-- Docker (used by the schema initializer to run `psql` without a local install)
+- `psql` or Docker — the schema initializer runs SQL against the RDS instance; set `demo_postgres_mcp_schema_initializer` in `terraform/demo.tfvars` to `"psql"` or `"docker"`
 
 ## Deploy
 
@@ -56,22 +54,35 @@ Terraform state is stored in S3. Before the first deploy in a new AWS account, c
 AWS_PROFILE=my-profile ./terraform/bootstrap/bootstrap.sh
 ```
 
-The script prints the values to put in `terraform/backend.hcl`. Copy the example and fill them in:
+The script prints the values to put in a backend config file. Copy the example and fill them in:
 
 ```bash
-cp terraform/backend.hcl.example terraform/backend.hcl
-# edit terraform/backend.hcl with the values printed above
+cp terraform/backend.hcl.example terraform/backend.sandbox.hcl
+# edit terraform/backend.sandbox.hcl with the values printed above
 ```
 
-`backend.hcl` is git-ignored — each account gets its own file. For multiple accounts on one machine, use named files (`backend.prod.hcl`) and pass `BACKEND_CONFIG=terraform/backend.prod.hcl` when deploying.
+Backend config files are git-ignored — each account gets its own file. The deploy script defaults to `terraform/backend.sandbox.hcl`. For multiple accounts on one machine, use named files (`backend.prod.hcl`) and pass `BACKEND_CONFIG=terraform/backend.prod.hcl` when deploying in `deploy_demo_db_tf.sh`.
 
 ### Step 2 — Deploy the demo database
+
+Before the first deploy, copy the tfvars example and fill in your settings:
+
+```bash
+cp terraform/terraform.tfvars.example terraform/demo.tfvars
+# edit terraform/demo.tfvars:
+#   - set demo_postgres_mcp_allowed_cidr_blocks to your public IP  (required for schema init)
+#   - set demo_postgres_mcp_schema_initializer to "psql" or "docker"
+```
+
+Then deploy:
 
 ```bash
 ./deploy_demo_db_tf.sh
 ```
 
-This provisions the RDS PostgreSQL instance, subnet group, security group, and Secrets Manager URIs via Terraform, then automatically runs the schema initializer via Docker. The apply takes ~5 minutes (RDS creation).
+This provisions the RDS PostgreSQL instance, subnet group, security group, and Secrets Manager URIs via Terraform, then runs the schema initializer against the RDS endpoint. The apply takes ~5 minutes (RDS creation).
+
+> **Subnet and connectivity requirement:** The subnets in `demo_postgres_mcp_subnet_ids` must be public subnets (route table has a `0.0.0.0/0` → IGW route) and `demo_postgres_mcp_publicly_accessible = true`. The schema initializer runs locally and connects to RDS over the public internet — a private-only subnet or missing CIDR allowlist entry will cause it to time out.
 
 Override defaults inline if needed:
 
@@ -92,33 +103,37 @@ Key outputs written to state:
 
 ### Step 3 — Deploy the MCP servers
 
-Both scripts deploy into the existing RDS VPC. They automatically discover the VPC ID, subnets, and RDS security group from the deployed RDS instance using `DB_IDENTIFIER`. You must supply `DATABASE_URI` by fetching the connection string from Secrets Manager first.
-
-Retrieve the URIs from the Terraform outputs:
-
-```bash
-VIEWS_DATABASE_URI=$(aws secretsmanager get-secret-value \
-  --secret-id $(terraform -chdir=terraform output -raw demo_postgres_mcp_views_database_uri_secret_arn) \
-  --query SecretString --output text)
-
-ADMIN_DATABASE_URI=$(aws secretsmanager get-secret-value \
-  --secret-id $(terraform -chdir=terraform output -raw demo_postgres_mcp_admin_database_uri_secret_arn) \
-  --query SecretString --output text)
-```
+Both scripts deploy into the existing RDS VPC and auto-discover the VPC ID, subnets, RDS security group, and VPC endpoint security groups from the deployed RDS instance using `DB_IDENTIFIER`.
 
 **Views MCP server** (tenant-scoped, read-only analytics views):
 
 ```bash
-DATABASE_URI="$VIEWS_DATABASE_URI" ./deploy_views_mcp_cf.sh
+./deploy_views_mcp_cf.sh
+```
+
+The Views script fetches `DATABASE_URI` automatically from the Terraform-managed Secrets Manager secret (`demo_postgres_mcp_views_database_uri_secret_arn`). No manual credential retrieval is needed. Override `DB_URI_SECRET_ARN` if the secret ARN changes:
+
+```bash
+DB_URI_SECRET_ARN=$(terraform -chdir=terraform output -raw demo_postgres_mcp_views_database_uri_secret_arn) \
+  ./deploy_views_mcp_cf.sh
 ```
 
 **Admin MCP server** (unrestricted, full database access):
 
 ```bash
-DATABASE_URI="$ADMIN_DATABASE_URI" ./deploy_admin_mcp_cf.sh
+./deploy_admin_mcp_cf.sh
+```
+
+The Admin script also fetches `DATABASE_URI` automatically from its Terraform-managed secret (`demo_postgres_mcp_admin_database_uri_secret_arn`). Override `DB_URI_SECRET_ARN` if the secret ARN changes:
+
+```bash
+DB_URI_SECRET_ARN=$(terraform -chdir=terraform output -raw demo_postgres_mcp_admin_database_uri_secret_arn) \
+  ./deploy_admin_mcp_cf.sh
 ```
 
 Both scripts handle create vs. update automatically and delete/recreate if the stack is in `ROLLBACK_COMPLETE`. Stack outputs including the MCP endpoint URL are printed on completion.
+
+> **VPC with existing endpoints:** If your VPC already has interface endpoints for Secrets Manager, ECR, and CloudWatch Logs (private DNS enabled), both deploy scripts will skip creating new ones (`CreateVpcEndpoints=false`) and instead auto-discover the endpoint security groups and add ingress rules for the ECS tasks. No manual configuration needed.
 
 ### Step 4 — Deploy the AgentCore agent runtime
 
@@ -126,62 +141,22 @@ Both scripts handle create vs. update automatically and delete/recreate if the s
 ./deploy_agentcore_agent_cf.sh
 ```
 
-### Step 5 — Run the demo app
+### Step 5 — Run the notebook
 
-The demo app is a local web UI that streams AgentCore responses via Server-Sent Events. It requires Python 3.9+ and the values output by the previous steps.
-
-Retrieve the AgentCore runtime ARN and MCP endpoints from the CloudFormation stacks:
+Open `text2sql_postgres_mcp_example.ipynb` in Jupyter. Set `AWS_PROFILE` at the top of the Configuration cell to match your AWS CLI profile — everything else (AgentCore runtime ARN, MCP endpoints, API keys) is resolved automatically from the CloudFormation stack outputs.
 
 ```bash
-AGENTCORE_RUNTIME_ARN=$(aws cloudformation describe-stacks \
-  --stack-name demo-postgres-mcp-agent \
-  --query 'Stacks[0].Outputs[?OutputKey==`AgentCoreRuntimeArn`].OutputValue' \
-  --output text)
-
-VIEWS_MCP_URL=$(aws cloudformation describe-stacks \
-  --stack-name demo-postgres-mcp-views \
-  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
-  --output text)
-
-VIEWS_MCP_API_KEY=$(aws secretsmanager get-secret-value \
-  --secret-id $(aws cloudformation describe-stacks \
-    --stack-name demo-postgres-mcp-views \
-    --query 'Stacks[0].Outputs[?OutputKey==`ApiKeySecretArn`].OutputValue' \
-    --output text) \
-  --query SecretString --output text)
-
-ADMIN_MCP_URL=$(aws cloudformation describe-stacks \
-  --stack-name demo-postgres-mcp-admin \
-  --query 'Stacks[0].Outputs[?OutputKey==`McpEndpointUrl`].OutputValue' \
-  --output text)
-
-ADMIN_MCP_API_KEY=$(aws secretsmanager get-secret-value \
-  --secret-id $(aws cloudformation describe-stacks \
-    --stack-name demo-postgres-mcp-admin \
-    --query 'Stacks[0].Outputs[?OutputKey==`ApiKeySecretArn`].OutputValue' \
-    --output text) \
-  --query SecretString --output text)
+pip install jupyter
+jupyter notebook text2sql_postgres_mcp_example.ipynb
 ```
 
-Open `deploy_demo_app.sh`, fill in the five exported variables at the top with the values above, then run:
+The notebook covers:
 
-```bash
-./deploy_demo_app.sh
-# → open http://localhost:8000
-```
-
-The script installs `fastapi`, `uvicorn`, and `boto3` from `frontend/requirements.txt`, then starts the server. Optional overrides:
-
-| Variable | Default | Description |
-|---|---|---|
-| `AWS_PROFILE` | `sandbox` | boto3 named profile |
-| `AWS_REGION` | `us-east-1` | AWS region |
-| `MODEL_ID` | `claude-haiku-4-5` | Bedrock model ID |
-| `PORT` | `8000` | HTTP port |
-
-## Test (Jupyter)
-
-Open and run `text2sql_postgres_mcp_example.ipynb` in Jupyter. The notebook automatically resolves all endpoints and API keys from the CloudFormation stack outputs — no manual configuration required.
+| Section | What it tests |
+|---|---|
+| **Views MCP** | Tenant-scoped KPI queries, non-allowed tenant rejection, read-only enforcement |
+| **Admin MCP** | Full schema listing, DB health check, slow query analysis, index recommendations, query optimization |
+| **Views vs Admin** | Side-by-side speed comparison on the same query |
 
 ## Tear Down
 
@@ -189,7 +164,7 @@ Delete the MCP and AgentCore stacks:
 
 ```bash
 for stack in demo-postgres-mcp-views demo-postgres-mcp-admin demo-postgres-mcp-agent; do
-  AWS_PROFILE=sandbox aws cloudformation delete-stack --stack-name $stack --region us-east-1
+  AWS_PROFILE=my-profile aws cloudformation delete-stack --stack-name $stack --region us-east-1
 done
 ```
 
@@ -198,5 +173,5 @@ Destroy the RDS database and supporting infrastructure:
 ```bash
 terraform -chdir=terraform destroy \
   -var-file=demo.tfvars \
-  -backend-config=terraform/backend.hcl
+  -var="region=us-east-1"
 ```
